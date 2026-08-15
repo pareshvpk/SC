@@ -21,17 +21,18 @@ the crossings where the ~40 % dropout lives). Crucially, selection is
 regimes — a confident fingerprint wins outright, an unreliable one defers to the
 NCC + center prior, and genuine ties are broken by center.
 
-## Headline result (30-pair self-eval, deliberately-hard FinFET)
+## Headline result (30-pair self-eval, realistic FinFET with mat superstructure)
 
 | | median px | <1 px | <1 µm | catastrophic (>100 px) |
 |---|---|---|---|---|
-| V1 (NCC + center) | 60.6 | 43.3 % | 56.7 % | 13 |
-| **V2** | **0.1** | **83.3 %** | **96.7 %** | **1** |
+| V1 (NCC + center) | 56.8 | 43.3 % | 53.3 % | 14 |
+| **V2** | **0.3** | **80.0 %** | **90.0 %** | **3** |
 
-The 1 remaining failure is the designed-hard case: a defect-free periodic region
-where the true drifted site sits farther from center than a look-alike repeat and
-no dropout signal exists to break the tie. Held-out seed 500 (params frozen):
-median 0.1 px, 93.3 % within 1 µm.
+The dataset now carries a realistic subarray-**mat superstructure** (dense cell
+blocks separated by sense-amp / driver channels -- looks like a real wafer array).
+The 3 remaining failures are all genuinely-hard cases: two `forced_periodic`
+honest-failure crops and one crop that landed deep inside a mat interior (locally
+periodic, so ambiguous by construction).
 
 ## Files to review
 

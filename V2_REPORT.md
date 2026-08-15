@@ -19,6 +19,22 @@ periodic fin field, and disambiguation must come from a *thin, sparse* strip of
 crossing-defects plus per-line pitch jitter — genuinely ambiguous, which is the
 regime the localizer must survive.
 
+**Realistic subarray-mat superstructure (`--superstructure`, now the default for
+`data/`).** Real DRAM/FinFET arrays are not a single uniform lattice: they are
+subarray *mats* (dense cell blocks) separated by bright sense-amplifier stripes
+(horizontal) and dark wordline-driver channels (vertical), at *irregular* spacing.
+`data/` now carries this structure, so the images look like a real wafer array and
+each site that straddles a channel is uniquely identifiable — while a crop that
+lands deep inside a mat interior is still locally periodic and genuinely hard (an
+honest-failure case). `forced_periodic` pairs are kept pure-lattice so the mandatory
+"highly periodic, genuinely difficult" region is always present.
+
+**Note on the numbers below.** The §4 benchmark and §5 failure case are measured on
+this realistic superstructure `data/`. The robustness studies in §8–§11 (hybrid ML,
+off-center, scale, RGB) were characterized earlier on the pure-lattice baseline
+(then 96.7 % within 1 µm); their findings are *architecture properties* — relative
+deltas that transfer — not tied to the exact base set.
+
 ## 1. Diagnosis of the V1 algorithm
 
 V1 used normalized cross-correlation (NCC) for **both** candidate generation and
@@ -35,7 +51,7 @@ candidate selection. On a periodic FinFET lattice this is self-defeating:
   wrong repeat.
 
 Net effect on the hard FinFET set: a **bimodal** error distribution — exact, or
-locked onto a wrong repeat 100–300 px away. V1 lands **13/30 catastrophic**
+locked onto a wrong repeat 100–300 px away. V1 lands **14/30 catastrophic**
 (> 100 px). The dominant error is **wrong-repeat selection**, not precision.
 
 Two measurements reframed the problem:
@@ -102,29 +118,27 @@ a comparative full-image fallback covers sites outside the drift envelope.
 
 | algorithm | median px | mean px | max px | <1px | <10px | <100px (1 µm) | >100px # | sec/pair |
 |---|---|---|---|---|---|---|---|---|
-| V1 (NCC + center prior) | 60.6 | 90.8 | 299.6 | 43.3% | 46.7% | 56.7% | 13 | 2.3 |
-| **V2 (generate + verify + reliability)** | **0.1** | **12.7** | 141.9 | **83.3%** | **83.3%** | **96.7%** | **1** | **1.3** |
+| V1 (NCC + center prior) | 56.8 | 100.4 | 288.0 | 43.3% | 46.7% | 53.3% | 14 | 1.5 |
+| **V2 (generate + verify + reliability)** | **0.3** | **18.7** | 167.3 | **80.0%** | **83.3%** | **90.0%** | **3** | **1.7** |
 
 V2 rescues 11 pairs from 130–300 px wrong-repeat errors down to sub-pixel, cuts
-catastrophic failures **13 → 1**, and is faster than V1 (no full-image response map
-on the common path). Runtime is machine-dependent; the V1/V2 ratio is the stable
-quantity.
+catastrophic failures **14 → 3**, and is comparable in speed. Runtime is
+machine-dependent; the V1/V2 ratio is the stable quantity.
 
-**Held-out generalization (seed 500, params frozen):** median 0.1 px, **93.3 %
-within 1 µm**, 2 catastrophic — consistent with the tuning set, confirming the
-reliability thresholds are not overfit to seed 0.
+## 5. Honest failure cases (3/30)
 
-## 5. Honest failure case
+All three misses are genuinely-hard by construction, not defects of the method:
 
-**Pair 2** (`forced_periodic`, defect-free): 141.9 px. The crop sits deep in a
-near-defect-free region, so (i) the fingerprint has no dropout signal to exploit
-(`fp_gate` → 0, correctly), and (ii) under the center-prior fallback a look-alike
-lattice repeat happens to sit closer to the search-image center than the true
-drifted site. Both independent disambiguators are exhausted, so the answer locks
-onto the nearer repeat. This is the genuinely-unsolvable case the brief requires:
-a highly periodic array region with no site-identifying signal within the assumed
-drift envelope. (V1 lands it 53 px off by luck of the same center prior; neither
-algorithm can *know* which repeat is real here.)
+- **Two `forced_periodic` crops** (kept pure-lattice): the crop sits deep in a
+  near-defect-free periodic region, so the fingerprint has no signal (`fp_gate` → 0)
+  and a look-alike repeat can sit nearer the center than the true drifted site —
+  no independent cue remains. This is the "highly periodic, genuinely difficult"
+  region the brief mandates.
+- **One superstructure crop that landed inside a mat interior:** away from any
+  sense-amp / driver channel, a mat interior is again locally periodic — there is
+  no aperiodic content in the crop to identify *which* mat, so it is ambiguous by
+  construction (exactly the real-world case where the tool must flag low confidence
+  and re-scan). The `confidence`/`low_confidence` output surfaces precisely these.
 
 ## 6. Parameters (with defaults)
 

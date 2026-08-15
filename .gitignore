@@ -30,3 +30,10 @@ prediction_*.png
 # OS
 .DS_Store
 Thumbs.db
+
+# blind positional test sets + samples (regenerate via make_blind_set.py)
+blind_test/
+blind_test_dram/
+blind_sample/
+blind_sample_dram/
+*_zones_hidden.json

@@ -202,6 +202,43 @@ def colorize_optical(gray: np.ndarray) -> np.ndarray:
     return np.clip(g * tint * 1.15, 0.0, 1.0)
 
 
+def _stripe_positions(fov_nm, gap_lo, gap_hi, rng):
+    """Aperiodic (jittered) stripe centres across [0, fov_nm), as absolute nm.
+    Irregular spacing makes the stripe *sequence* a unique code, so a crop that
+    straddles stripes is individually identifiable -- this is what makes the
+    superstructure break the periodic lattice's translation ambiguity."""
+    pos, x = [], rng.uniform(gap_lo, gap_hi)
+    while x < fov_nm:
+        pos.append(x)
+        x += rng.uniform(gap_lo, gap_hi)
+    return np.asarray(pos, dtype=np.float32)
+
+
+def _channel_field(coords_nm, positions, width_nm):
+    """1-D proximity to the nearest channel centre: ~1 inside a channel, ~0 in the
+    mat interior. Evaluated identically for reference and search -> consistent."""
+    f = np.zeros_like(coords_nm, dtype=np.float32)
+    for p in positions:
+        f = np.maximum(f, np.exp(-0.5 * ((coords_nm - p) / width_nm) ** 2))
+    return f
+
+
+def apply_superstructure(img, x_nm, y_nm, sup):
+    """Turn a uniform lattice into a real subarray-MAT array: dense cell blocks
+    separated by CLEAR sense-amplifier stripes (horizontal) and wordline-driver
+    channels (vertical). The lattice is SUPPRESSED inside the channels (so blocks
+    are separated by gaps, as on a real DRAM/FinFET array -- CITE citations.md),
+    the horizontal channels carry a bright sense-amp band and the vertical ones a
+    darker driver band. Irregular channel spacing makes each mat identifiable."""
+    hc = _channel_field(y_nm, sup["h_pos"], sup["h_w"])     # rows: sense-amp channels
+    vc = _channel_field(x_nm, sup["v_pos"], sup["v_w"])     # cols: driver channels
+    chan = np.maximum(hc[:, None], vc[None, :])             # 2-D: 1 in any channel
+    out = img * (1.0 - 0.9 * chan)                          # clear the cells in channels
+    out = out + sup["h_amp"] * hc[:, None] * (1.0 - vc[None, :])   # bright sense-amp bands
+    out = out - sup["v_amp"] * vc[None, :] * (1.0 - 0.5 * hc[:, None])  # dark driver bands
+    return np.clip(out + sup["bg"], 0.0, 1.0).astype(np.float32)
+
+
 @dataclass
 class PairMeta:
     pair_id: int
@@ -220,7 +257,8 @@ class PairMeta:
 
 def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
                   drift_nm: "tuple | None" = None, style: str = "finfet",
-                  mag_jitter: bool = False, rgb: bool = False):
+                  mag_jitter: bool = False, rgb: bool = False,
+                  superstructure: bool = False):
     """Generate one (reference, search, ground_truth) sample.
 
     forced_periodic: if True, the reference crop is deliberately placed away
@@ -251,6 +289,19 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
     defect_prob = 0.03 if forced_periodic else 0.4
     is_defect = rng.random((n_lines_y, n_lines_x)) < defect_prob
     cell_scale = np.where(is_defect, 0.0, 1.0).astype(np.float32)
+
+    # aperiodic superstructure (subarray mats separated by sense-amp stripes /
+    # driver channels) -- makes the image look like a real array AND breaks the
+    # pure-lattice translation ambiguity so localization is well-posed everywhere.
+    sup = None
+    if superstructure:
+        sup = dict(
+            h_pos=_stripe_positions(SEARCH_FOV_NM, 1500.0, 2800.0, rng),   # sense-amp rows
+            v_pos=_stripe_positions(SEARCH_FOV_NM, 1500.0, 2800.0, rng),   # driver columns
+            h_w=float(rng.uniform(180.0, 300.0)), v_w=float(rng.uniform(160.0, 280.0)),
+            h_amp=float(rng.uniform(0.35, 0.50)), v_amp=float(rng.uniform(0.20, 0.30)),
+            bg=float(rng.uniform(0.10, 0.16)),
+        )
 
     # --- choose reference crop location (in nm, within the search FOV) ---
     # Physically, the search capture is centered on the *previous* site and
@@ -287,12 +338,16 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
     ref_y = y0 + lin
     RX, RY = np.meshgrid(ref_x, ref_y)
     ref_super = render_layout(RX, RY, params, offsets_x, offsets_y, cell_scale)
+    if sup is not None:
+        ref_super = apply_superstructure(ref_super, ref_x, ref_y, sup)
     ref_base = cv2.resize(ref_super, (REF_PX, REF_PX), interpolation=cv2.INTER_AREA)
 
     # --- render full search FOV supersampled, then box-downsample ---
     lin_s = (np.arange(SEARCH_PX * SUPERSAMPLE) + 0.5) / SUPERSAMPLE * SEARCH_NM_PER_PX
     SX, SY = np.meshgrid(lin_s, lin_s)
     search_super = render_layout(SX, SY, params, offsets_x, offsets_y, cell_scale)
+    if sup is not None:
+        search_super = apply_superstructure(search_super, lin_s, lin_s, sup)
     search_base = cv2.resize(search_super, (SEARCH_PX, SEARCH_PX), interpolation=cv2.INTER_AREA)
 
     gt_x = cx / SEARCH_NM_PER_PX
@@ -360,7 +415,8 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
 
 
 def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "int | None" = None,
-                     style: str = "finfet", mag_jitter: bool = False, rgb: bool = False):
+                     style: str = "finfet", mag_jitter: bool = False, rgb: bool = False,
+                     superstructure: bool = False):
     # Number of deliberately-hard "forced periodic" (near-defect-free) pairs scales
     # with the set size: none for a tiny quick-start set (so the first pair a
     # reviewer runs is a normal, solvable one), up to 3 for a full >=30-pair set
@@ -371,8 +427,12 @@ def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "i
     all_meta = []
     for i in range(n):
         forced = i < n_forced_periodic
+        # forced-periodic pairs are kept pure-lattice (no superstructure) so the
+        # mandatory "genuinely-hard periodic region" honest-failure case survives
+        # even when the rest of the set carries the disambiguating mat structure.
         ref_img, search_img, meta = generate_pair(i, seed0 + i, forced_periodic=forced,
-                                                  style=style, mag_jitter=mag_jitter, rgb=rgb)
+                                                  style=style, mag_jitter=mag_jitter, rgb=rgb,
+                                                  superstructure=superstructure and not forced)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_ref.png"), ref_img)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_search.png"), search_img)
         all_meta.append(asdict(meta))
@@ -394,10 +454,15 @@ if __name__ == "__main__":
     ap.add_argument("--rgb", action="store_true",
                     help="generate 3-channel RGB optical-microscope-style pairs "
                          "(thin-film-interference colour) instead of grayscale SEM (bonus)")
+    ap.add_argument("--superstructure", action="store_true",
+                    help="add the realistic subarray-MAT superstructure (sense-amp + "
+                         "driver channels) -- looks like a real wafer array and makes "
+                         "off-mat sites uniquely identifiable")
     args = ap.parse_args()
 
     t0 = time.time()
     meta = generate_dataset(args.n, args.out, seed0=args.seed, style=args.style,
-                            mag_jitter=args.mag_jitter, rgb=args.rgb)
+                            mag_jitter=args.mag_jitter, rgb=args.rgb,
+                            superstructure=args.superstructure)
     dt = time.time() - t0
     print(f"Generated {len(meta)} {args.style} pairs in {dt:.2f}s -> {args.out}/")

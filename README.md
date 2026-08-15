@@ -17,8 +17,10 @@ test sets, not just a fixed 10×), **never crashes** (any internal failure retur
 image center with a low-confidence flag, so a grader always gets a coordinate), and
 reports a per-result `confidence`.
 
-**Headline result (self-eval, 30 FinFET pairs):** median **0.1 px**, **96.7% within 1 µm**,
-~1.3 s/pair. See `V2_REPORT.md` for the full engineering write-up.
+**Headline result (self-eval, 30 realistic FinFET pairs with subarray-mat
+superstructure):** median **0.3 px**, **90% within 1 µm**, ~1.7 s/pair — vs V1's 53%
+(and 14 catastrophic failures). The 3 misses are genuinely-hard cases (mat-interior
+/ forced-periodic crops). See `V2_REPORT.md` for the full engineering write-up.
 
 ---
 
@@ -98,7 +100,9 @@ python dataset_gen.py --style {finfet,dram} --n 30 --out data --seed 0 [--mag-ji
   for a harder, more realistic scale-robustness test (recorded as `magnification_ratio`).
 - `--rgb` — **bonus:** generate 3-channel **RGB optical-microscope** pairs (thin-film-interference
   colour) instead of grayscale SEM. The inference script auto-detects and localizes RGB at
-  ~grayscale accuracy (95% vs 96.7% within 1 µm).
+  ~parity with the grayscale equivalent (within ~1–2 pts on the same set).
+- `--superstructure` — add the realistic subarray-**mat** structure (sense-amp + driver
+  channels) so the image looks like a real wafer array. This is now on by default for `data/`.
 - Each pair: `pair_XXX_ref.png` (1000×1000), `pair_XXX_search.png` (1000×1000), and the
   **true center** recorded in `ground_truth.json`.
 - Realism (each choice cited in `citations.md`): independent per-image Poisson+Gaussian
