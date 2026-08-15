@@ -196,10 +196,12 @@ class PairMeta:
     ref_blur_sigma: float
     search_blur_sigma: float
     forced_periodic: bool
+    magnification_ratio: float = 10.0   # effective search:reference magnification
 
 
 def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
-                  drift_nm: "tuple | None" = None, style: str = "finfet"):
+                  drift_nm: "tuple | None" = None, style: str = "finfet",
+                  mag_jitter: bool = False):
     """Generate one (reference, search, ground_truth) sample.
 
     forced_periodic: if True, the reference crop is deliberately placed away
@@ -295,7 +297,11 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
     # rotation = scan-field rotation/distortion; scale = magnification-
     # calibration uncertainty. See citations.md #5.
     rot_deg = rng.uniform(-2.0, 2.0)
-    scale = rng.uniform(0.97, 1.03)
+    # scale jitter = magnification-calibration uncertainty. With --mag-jitter the
+    # range widens to a REAL magnification variation (effective ratio ~9x-11.1x),
+    # to model an unknown/harder test set and to validate the localizer's scale
+    # measurement. The effective magnification is SCALE_RATIO / scale.
+    scale = rng.uniform(0.90, 1.10) if mag_jitter else rng.uniform(0.97, 1.03)
     center = (SEARCH_PX / 2, SEARCH_PX / 2)
     M = cv2.getRotationMatrix2D(center, rot_deg, scale)
     search_img = cv2.warpAffine(search_img, M, (SEARCH_PX, SEARCH_PX),
@@ -319,12 +325,13 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
         rotation_deg=float(rot_deg), scale=float(scale),
         ref_blur_sigma=float(ref_blur_sigma), search_blur_sigma=float(search_blur_sigma),
         forced_periodic=forced_periodic,
+        magnification_ratio=float(SCALE_RATIO / scale),
     )
     return ref_u8, search_u8, meta
 
 
 def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "int | None" = None,
-                     style: str = "finfet"):
+                     style: str = "finfet", mag_jitter: bool = False):
     # Number of deliberately-hard "forced periodic" (near-defect-free) pairs scales
     # with the set size: none for a tiny quick-start set (so the first pair a
     # reviewer runs is a normal, solvable one), up to 3 for a full >=30-pair set
@@ -336,7 +343,7 @@ def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "i
     for i in range(n):
         forced = i < n_forced_periodic
         ref_img, search_img, meta = generate_pair(i, seed0 + i, forced_periodic=forced,
-                                                  style=style)
+                                                  style=style, mag_jitter=mag_jitter)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_ref.png"), ref_img)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_search.png"), search_img)
         all_meta.append(asdict(meta))
@@ -352,9 +359,13 @@ if __name__ == "__main__":
     ap.add_argument("--n", type=int, default=30, help="number of pairs to generate")
     ap.add_argument("--out", type=str, default="data", help="output directory")
     ap.add_argument("--seed", type=int, default=0, help="base random seed")
+    ap.add_argument("--mag-jitter", action="store_true",
+                    help="vary the true magnification per pair (~9x-11x) instead of a "
+                         "fixed 10x -- a harder, more realistic set for scale-robustness")
     args = ap.parse_args()
 
     t0 = time.time()
-    meta = generate_dataset(args.n, args.out, seed0=args.seed, style=args.style)
+    meta = generate_dataset(args.n, args.out, seed0=args.seed, style=args.style,
+                            mag_jitter=args.mag_jitter)
     dt = time.time() - t0
     print(f"Generated {len(meta)} {args.style} pairs in {dt:.2f}s -> {args.out}/")

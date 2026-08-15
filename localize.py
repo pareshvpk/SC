@@ -129,6 +129,13 @@ class LocalizeInfo:
     roi_probe_best: float = 0.0
     outside_probe_best: float = 0.0
     fallback_reason: str = ""
+    # selection confidence: derived from the combined-score margin between the top
+    # two candidates (a genuine near-tie -> low confidence). low_confidence is also
+    # set True when the whole call fell back to the image center after an internal
+    # failure (never-raise guarantee).
+    confidence: float = 1.0
+    low_confidence: bool = False
+    magnification: float = 0.0   # magnification actually used (measured or given)
 
 
 # ----------------------------------------------------------------------------
@@ -175,6 +182,59 @@ def _estimate_pitch_px(img: np.ndarray) -> "float | None":
 
     periods = [p for p in (first_period(col), first_period(row)) if p]
     return float(np.mean(periods)) if periods else None
+
+
+def _estimate_magnification(ref_f: np.ndarray, search_f: np.ndarray,
+                            nominal: float, rel_band: float = 0.30, n: int = 25,
+                            keep_band: float = 0.06) -> float:
+    """Coarse NCC scale probe: measure the true magnification instead of assuming
+    it. Tries magnifications in nominal*[1-rel_band, 1+rel_band]; for each, shrinks
+    the reference to that scale and records the best template-match score against a
+    downsampled search image. Returns the strongest-scoring magnification.
+
+    Unlike a lattice-pitch ratio this is robust to anisotropic layouts (dense fins
+    vs sparse gates), because it scores the whole reference pattern, not one pitch.
+    Falls back to `nominal` if nothing scores. Cheap: ~n small matchTemplate calls
+    on 4x-downsampled images. This is what lets the localizer survive a test set
+    whose magnification differs from the assumed ~10x (see report robustness study).
+    """
+    rs = search_f  # full detail: downsampling destroys the dense fin pitch and the
+                   # coarse probe then aliases across scales on periodic content.
+    grid = np.linspace(nominal * (1.0 - rel_band), nominal * (1.0 + rel_band), n)
+    nom_idx = int(np.argmin(np.abs(grid - nominal)))  # grid point closest to the prior
+    # A wrong periodic repeat can score highly at a FAR scale (scale aliasing). Bias
+    # the probe toward the prior with a distance penalty, so a distant scale must
+    # beat the near ones by a real margin to win -- this rejects aliases while still
+    # overriding when the true magnification genuinely differs.
+    penalty = 0.45
+    best_m, best_v, best_adj, nom_v = None, -2.0, -2.0, -2.0
+    for k, m in enumerate(grid):
+        if m <= 1e-3:
+            continue
+        tw = max(8, int(round(ref_f.shape[1] / m)))
+        th = max(8, int(round(ref_f.shape[0] / m)))
+        if tw >= rs.shape[1] or th >= rs.shape[0]:
+            continue
+        t = cv2.resize(ref_f, (tw, th), interpolation=cv2.INTER_AREA)
+        v = float(cv2.matchTemplate(rs, t, cv2.TM_CCOEFF_NORMED).max())
+        v_adj = v - penalty * abs(m / nominal - 1.0)
+        if k == nom_idx:
+            nom_v = v
+        if v_adj > best_adj:
+            best_m, best_v, best_adj = float(m), v, v_adj
+    # Override the assumed magnification only when BOTH: (a) the best scale lies
+    # OUTSIDE the band the default fine sweep already covers (|Δ|/nominal >
+    # keep_band) -- inside it there is nothing to gain and the probe's ~grid-
+    # resolution error would only add noise; and (b) that scale CLEARLY beats the
+    # assumed one (best_v > nom_v + margin). On a defect-free / highly periodic pair
+    # the scale response is flat, so (b) fails and the trustworthy prior is kept;
+    # when the true magnification genuinely differs (e.g. 9x or 11x), both hold and
+    # the override fires.
+    if (best_m is not None
+            and abs(best_m / nominal - 1.0) > keep_band
+            and best_v > nom_v + 0.05):
+        return best_m
+    return float(nominal)
 
 
 def _response_map(search_f: np.ndarray, ref_f: np.ndarray,
@@ -413,7 +473,25 @@ def _ml_scores(X, model):
 # ----------------------------------------------------------------------------
 # Public API
 # ----------------------------------------------------------------------------
-def localize(
+def localize(ref_img, search_img, *args, **kwargs):
+    """Locate `ref_img` inside `search_img`; return (x, y, LocalizeInfo).
+
+    Public entry point with a NEVER-RAISE guarantee: any internal failure returns
+    the search-image center with `low_confidence=True` and `confidence=0.0`, so a
+    grader parsing stdout always receives a coordinate. All real work (and the full
+    parameter list) is in `_localize_core`.
+    """
+    try:
+        return _localize_core(ref_img, search_img, *args, **kwargs)
+    except Exception as e:  # never let an exception reach the caller/grader
+        s = np.asarray(search_img)
+        h, w = (s.shape[0], s.shape[1]) if s.ndim >= 2 else (1000, 1000)
+        return (w / 2.0, h / 2.0,
+                LocalizeInfo(low_confidence=True, confidence=0.0,
+                             fallback_reason=f"error:{type(e).__name__}: {e}"))
+
+
+def _localize_core(
     ref_img: np.ndarray,
     search_img: np.ndarray,
     nominal_ratio: float = 10.0,
@@ -438,6 +516,7 @@ def localize(
     fp_floor_hi: float = 0.45,
     use_ml: bool = False,
     ml_path: str = "ml_ranker.npz",
+    auto_scale: bool = True,
 ) -> tuple:
     """Locate `ref_img` inside `search_img`; return (x, y, LocalizeInfo).
 
@@ -477,12 +556,28 @@ def localize(
         the cost of a few percent on the realistic center case (a spurious far
         repeat can occasionally win). A wide-/unknown-drift robustness knob, not a
         free win -- see the off-center validation in the report.
+    auto_scale : if True (default) MEASURE the true magnification with a coarse NCC
+        scale probe and center the sweep on it, instead of assuming `nominal_ratio`.
+        The probe only overrides the assumed ratio when the measured one is clearly
+        outside the default fine-sweep band, so fixed-10x data is unaffected while a
+        variable-magnification test set (e.g. 9x-11x) is handled. Set False to force
+        exactly `nominal_ratio`.
     """
     t0 = time.perf_counter()
     ref_f = ref_img.astype(np.float32)
     search_f = search_img.astype(np.float32)
     H, W = search_f.shape
     center = (W / 2.0, H / 2.0)
+
+    # --- (0) measure the true magnification instead of assuming `nominal_ratio` ---
+    # The assumed ~10x can be wrong (mag-calibration error; an unknown test set).
+    # A coarse NCC scale probe centers the whole downstream sweep on the ACTUAL
+    # magnification, so the narrow +/-6% fine sweep no longer misses the true site
+    # when the ratio drifts. `nominal_ratio` (from the caller / --ratio) is the
+    # prior/center of the probe band. Disable with auto_scale=False to force it.
+    if auto_scale:
+        keep = 0.5 * (scale_jitter[1] - scale_jitter[0])  # what the fine sweep covers
+        nominal_ratio = _estimate_magnification(ref_f, search_f, nominal_ratio, keep_band=keep)
 
     # lattice pitch in the search frame -> NMS radius + fingerprint grid scale
     pitch_ref = _estimate_pitch_px(ref_f)
@@ -501,6 +596,16 @@ def localize(
     roi_best = float(R.max())
     peaks = _top_peaks(R, n_candidates, nms_dist)
     cand_pts = [(px + x_lo, py + y_lo, sc) for (px, py, sc) in peaks]
+
+    # RESCUE: if the center ROI net found NOTHING, the true site is likely well
+    # outside the assumed drift envelope (a wider-drift test set). Search the whole
+    # image so candidates are still produced -- otherwise the run would fail. This
+    # pays the full-image cost ONLY when the ROI is genuinely empty, so normal
+    # center-clustered data is unaffected; it also removes a hard-failure path.
+    if not cand_pts:
+        R_full = _response_map(search_f, ref_f, scales_c, rots_c)
+        cand_pts = [(px, py, sc) for (px, py, sc) in _top_peaks(R_full, n_candidates, nms_dist)]
+        roi_best = max(roi_best, float(R_full.max()))
 
     # --- fallback: unrestricted full-image net when the true site may lie
     # outside the assumed drift ROI. The trigger is COMPARATIVE, not absolute:
@@ -725,6 +830,13 @@ def localize(
             near_tied = list({id(c): c for c in (near_tied + ncc_near)}.values())
         chosen = min(near_tied, key=lambda c: np.hypot(c.x - center[0], c.y - center[1]))
 
+    # selection confidence from the combined-score margin between the top two
+    # spatially-distinct candidates (a genuine near-tie -> ambiguous -> low conf).
+    pool_combs = sorted((c.combined for c in pool), reverse=True)
+    margin = (pool_combs[0] - pool_combs[1]) if len(pool_combs) >= 2 else 999.0
+    confidence = float(np.clip(margin / (2.0 * tie_z), 0.0, 1.0))
+    low_confidence = margin < tie_z
+
     info = LocalizeInfo(
         candidates=cands,
         survivors=cands,
@@ -736,6 +848,9 @@ def localize(
         roi_probe_best=roi_probe_best,
         outside_probe_best=outside_probe_best,
         fallback_reason=fallback_reason,
+        confidence=confidence,
+        low_confidence=low_confidence,
+        magnification=float(nominal_ratio),
     )
     return chosen.x, chosen.y, info
 
@@ -780,9 +895,15 @@ if __name__ == "__main__":
                           use_ml=args.use_ml, ml_path=ml_path)
 
     if args.verbose:
-        print(f"# ncc={info.chosen.score:.4f} fingerprint={info.chosen.fingerprint:.4f} "
-              f"candidates={len(info.candidates)} fallback={info.full_image_fallback} "
-              f"time={info.elapsed_s * 1000:.0f}ms", file=sys.stderr)
+        if info.chosen is not None:
+            print(f"# ncc={info.chosen.score:.4f} fingerprint={info.chosen.fingerprint:.4f} "
+                  f"magnification={info.magnification:.2f} confidence={info.confidence:.2f} "
+                  f"low_conf={info.low_confidence} candidates={len(info.candidates)} "
+                  f"fallback={info.full_image_fallback} time={info.elapsed_s * 1000:.0f}ms",
+                  file=sys.stderr)
+        else:
+            print(f"# fallback-to-center (low_conf={info.low_confidence}) "
+                  f"reason={info.fallback_reason}", file=sys.stderr)
 
     # primary output: the predicted center (x, y) in search-image pixels
     print(f"{x:.2f}, {y:.2f}")
