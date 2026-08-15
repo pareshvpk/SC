@@ -131,3 +131,7 @@ The hybrid matches (does not beat) the classical accuracy — see `V2_REPORT.md`
 - Python 3.11. Install with `pip install -r requirements.txt` (full `pip freeze` of the
   development environment). Inference needs only numpy / OpenCV / SciPy; scikit-learn is
   required **only** to retrain the optional ranker (`requirements-train.txt`).
+
+## License
+
+Released under the **Apache License 2.0** — see [`LICENSE`](LICENSE).
