@@ -1,0 +1,8 @@
+# Extra dependencies for TRAINING the optional hybrid ML ranker only
+# (make_ranker_data.py + train_ranker.ipynb). Inference in localize.py needs
+# nothing beyond requirements.txt -- the trained model runs as a pure-numpy
+# forward pass. Install these on top of requirements.txt to retrain.
+-r requirements.txt
+scikit-learn==1.9.0
+joblib==1.5.3
+threadpoolctl==3.6.0

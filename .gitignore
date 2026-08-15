@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Generated datasets / eval outputs (regenerate via dataset_gen.py, eval.py,
+# make_offcenter_sets.py). The committed `data/` sample set is force-kept below.
+sample/
+data_dram/
+data_corner/
+data_inner/
+data_val/
+data_finfet/
+data_check/
+*_overlay.png
+prediction_*.png
+
+# OS
+.DS_Store
+Thumbs.db
