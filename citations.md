@@ -292,3 +292,32 @@ width variation intrinsic to advanced lithography:
 - "N7 FinFET Self-Aligned Quadruple Patterning Modeling," SISPAD 2018 — models
   SAQP-induced pitch walk at the 7 nm (24 nm fin-pitch) node.
   http://in4.iue.tuwien.ac.at/pdfs/sispad2018/SISPAD_2018_344-347.pdf
+
+## 10. RGB optical-microscope colorization (`colorize_optical`, `--rgb` bonus)
+
+The bonus RGB mode renders the same periodic layout as a 3-channel optical-
+microscope image with a thin-film-interference colour cast (cool shadows, warm
+highlights). Optical inspection of wafers is genuinely colour: thin dielectric
+films reflect light with interference colours whose hue tracks film thickness, so
+a colour cast that varies with the structure is physically grounded:
+
+- "Optical video interpretation of interference colours from thin transparent
+  films on silicon," Materials Letters (ScienceDirect) — interference colouration
+  of thin films on silicon and its use for thickness interpretation.
+  https://www.sciencedirect.com/science/article/abs/pii/S0167577X0400285X
+- "White-light colorimetric interferometry for measurement of thickness and
+  topography on semiconductor structures," Scientific Reports (2025) — recent
+  colour/interferometric metrology of semiconductor thin-film structures.
+  https://www.nature.com/articles/s41598-025-25799-3
+- USPTO 6,570,650, "Apparatus and methods for reducing thin film color variation
+  in optical inspection of semiconductor devices" — documents thin-film colour
+  variation as a real effect in optical wafer inspection.
+  https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/6570650
+- Leica Microsystems, "Semiconductor Inspection Microscopy Solutions" — overview
+  of brightfield/darkfield optical (colour) wafer/IC inspection.
+  https://www.leica-microsystems.com/applications/industrial-microscopy-markets/electronics-semiconductor/semiconductor-inspection/
+
+The tint is applied as a luminance-preserving multiplier, so the structural
+content (and the crossing-defect fingerprint) survives a luminance conversion --
+which is how the localizer handles RGB input at ~grayscale accuracy (95% vs 96.7%
+within 1 um).

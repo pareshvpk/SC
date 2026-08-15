@@ -96,6 +96,9 @@ python dataset_gen.py --style {finfet,dram} --n 30 --out data --seed 0 [--mag-ji
 - `--n` — number of pairs. `--out` — output directory. `--seed` — base seed.
 - `--mag-jitter` — vary the true magnification per pair (~9×–11×) instead of a fixed 10×,
   for a harder, more realistic scale-robustness test (recorded as `magnification_ratio`).
+- `--rgb` — **bonus:** generate 3-channel **RGB optical-microscope** pairs (thin-film-interference
+  colour) instead of grayscale SEM. The inference script auto-detects and localizes RGB at
+  ~grayscale accuracy (95% vs 96.7% within 1 µm).
 - Each pair: `pair_XXX_ref.png` (1000×1000), `pair_XXX_search.png` (1000×1000), and the
   **true center** recorded in `ground_truth.json`.
 - Realism (each choice cited in `citations.md`): independent per-image Poisson+Gaussian

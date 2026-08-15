@@ -183,6 +183,25 @@ def add_sensor_noise(img: np.ndarray, rng: np.random.Generator,
     return np.clip(noisy, 0.0, 1.0).astype(np.float32)
 
 
+# Thin-film-interference tint (BGR): shadows read cool/bluish, highlights warm/gold
+# -- the characteristic optical-microscope colour cast. Applied as a MULTIPLIER on
+# luminance so a grayscale (luminance) conversion recovers the structure almost
+# exactly, preserving the fingerprint the localizer relies on. See citations.md.
+_OPTICAL_COOL_BGR = np.array([0.95, 0.75, 0.55], dtype=np.float32)   # dark regions
+_OPTICAL_WARM_BGR = np.array([0.75, 0.95, 1.00], dtype=np.float32)   # bright regions
+
+
+def colorize_optical(gray: np.ndarray) -> np.ndarray:
+    """Map a grayscale layout (0..1 luminance) to a 3-channel BGR optical-
+    microscope image. Colour is a deterministic, luminance-preserving function of
+    the structure (a smooth cool->warm thin-film tint), so a matching physical site
+    has matching colour in the reference and search captures, and luminance
+    conversion recovers the structure. Returns float32 BGR in 0..1."""
+    g = np.clip(gray, 0.0, 1.0)[..., None]
+    tint = _OPTICAL_COOL_BGR * (1.0 - g) + _OPTICAL_WARM_BGR * g
+    return np.clip(g * tint * 1.15, 0.0, 1.0)
+
+
 @dataclass
 class PairMeta:
     pair_id: int
@@ -201,7 +220,7 @@ class PairMeta:
 
 def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
                   drift_nm: "tuple | None" = None, style: str = "finfet",
-                  mag_jitter: bool = False):
+                  mag_jitter: bool = False, rgb: bool = False):
     """Generate one (reference, search, ground_truth) sample.
 
     forced_periodic: if True, the reference crop is deliberately placed away
@@ -313,11 +332,21 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
     #     search strictly noisier than reference ---
     ref_rng = np.random.default_rng(seed * 2 + 1)
     search_rng = np.random.default_rng(seed * 2 + 2)
-    ref_img = add_sensor_noise(ref_img, ref_rng, shot_scale=6.0, read_std=0.004)
-    search_img = add_sensor_noise(search_img, search_rng, shot_scale=3.0, read_std=0.008)
-
-    ref_u8 = (ref_img * 255).astype(np.uint8)
-    search_u8 = (search_img * 255).astype(np.uint8)
+    if rgb:
+        # RGB optical-microscope bonus: colorize (BGR) then add INDEPENDENT noise
+        # per channel per capture, so the reference and search are separate colour
+        # acquisitions. Colour is a function of luminance -> physically consistent.
+        ref_c = colorize_optical(ref_img)
+        search_c = colorize_optical(search_img)
+        ref_c = np.stack([add_sensor_noise(ref_c[..., k], ref_rng, 6.0, 0.004) for k in range(3)], axis=-1)
+        search_c = np.stack([add_sensor_noise(search_c[..., k], search_rng, 3.0, 0.008) for k in range(3)], axis=-1)
+        ref_u8 = (ref_c * 255).astype(np.uint8)
+        search_u8 = (search_c * 255).astype(np.uint8)
+    else:
+        ref_img = add_sensor_noise(ref_img, ref_rng, shot_scale=6.0, read_std=0.004)
+        search_img = add_sensor_noise(search_img, search_rng, shot_scale=3.0, read_std=0.008)
+        ref_u8 = (ref_img * 255).astype(np.uint8)
+        search_u8 = (search_img * 255).astype(np.uint8)
 
     meta = PairMeta(
         pair_id=pair_id, seed=seed, gt_x=float(gt_x), gt_y=float(gt_y),
@@ -331,7 +360,7 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
 
 
 def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "int | None" = None,
-                     style: str = "finfet", mag_jitter: bool = False):
+                     style: str = "finfet", mag_jitter: bool = False, rgb: bool = False):
     # Number of deliberately-hard "forced periodic" (near-defect-free) pairs scales
     # with the set size: none for a tiny quick-start set (so the first pair a
     # reviewer runs is a normal, solvable one), up to 3 for a full >=30-pair set
@@ -343,7 +372,7 @@ def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "i
     for i in range(n):
         forced = i < n_forced_periodic
         ref_img, search_img, meta = generate_pair(i, seed0 + i, forced_periodic=forced,
-                                                  style=style, mag_jitter=mag_jitter)
+                                                  style=style, mag_jitter=mag_jitter, rgb=rgb)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_ref.png"), ref_img)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_search.png"), search_img)
         all_meta.append(asdict(meta))
@@ -362,10 +391,13 @@ if __name__ == "__main__":
     ap.add_argument("--mag-jitter", action="store_true",
                     help="vary the true magnification per pair (~9x-11x) instead of a "
                          "fixed 10x -- a harder, more realistic set for scale-robustness")
+    ap.add_argument("--rgb", action="store_true",
+                    help="generate 3-channel RGB optical-microscope-style pairs "
+                         "(thin-film-interference colour) instead of grayscale SEM (bonus)")
     args = ap.parse_args()
 
     t0 = time.time()
     meta = generate_dataset(args.n, args.out, seed0=args.seed, style=args.style,
-                            mag_jitter=args.mag_jitter)
+                            mag_jitter=args.mag_jitter, rgb=args.rgb)
     dt = time.time() - t0
     print(f"Generated {len(meta)} {args.style} pairs in {dt:.2f}s -> {args.out}/")

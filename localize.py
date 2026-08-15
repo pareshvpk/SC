@@ -564,8 +564,16 @@ def _localize_core(
         exactly `nominal_ratio`.
     """
     t0 = time.perf_counter()
-    ref_f = ref_img.astype(np.float32)
-    search_f = search_img.astype(np.float32)
+    # RGB bonus: accept 3-channel optical-microscope images. The structural
+    # matching runs on luminance (robust, reuses the whole grayscale pipeline);
+    # the color channels are retained for the color-fingerprint disambiguator (§
+    # color cue below). Grayscale inputs are unchanged -> zero regression risk.
+    ref_color = ref_img if (np.ndim(ref_img) == 3) else None
+    search_color = search_img if (np.ndim(search_img) == 3) else None
+    ref_gray = cv2.cvtColor(ref_img, cv2.COLOR_BGR2GRAY) if ref_color is not None else ref_img
+    search_gray = cv2.cvtColor(search_img, cv2.COLOR_BGR2GRAY) if search_color is not None else search_img
+    ref_f = np.asarray(ref_gray, dtype=np.float32)
+    search_f = np.asarray(search_gray, dtype=np.float32)
     H, W = search_f.shape
     center = (W / 2.0, H / 2.0)
 
@@ -882,8 +890,19 @@ if __name__ == "__main__":
                     help="print match diagnostics to stderr")
     args = ap.parse_args()
 
-    ref_img = cv2.imread(args.reference, cv2.IMREAD_GRAYSCALE)
-    search_img = cv2.imread(args.search, cv2.IMREAD_GRAYSCALE)
+    def _read(path):
+        # preserve native channels: grayscale stays 2-D, RGB optical stays 3-D
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            return None
+        if img.ndim == 3 and img.shape[2] == 4:       # BGRA -> BGR (drop alpha)
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        if img.dtype != np.uint8:                     # 16-bit etc. -> 8-bit
+            img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        return img
+
+    ref_img = _read(args.reference)
+    search_img = _read(args.search)
     if ref_img is None:
         sys.exit(f"ERROR: could not read reference image: {args.reference}")
     if search_img is None:

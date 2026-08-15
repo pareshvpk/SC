@@ -20,7 +20,11 @@ data_inner/
 data_val/
 data_finfet/
 data_check/
+data_varmag/
+data_rgb*/
+data_gray*/
 *_overlay.png
+*_preview.png
 prediction_*.png
 
 # OS
