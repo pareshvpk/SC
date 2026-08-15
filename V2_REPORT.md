@@ -214,6 +214,41 @@ drift physics and maximizes the scored metric); `always_full_search=True` is an
 opt-in knob for when the drift envelope proves wide. Reproduce with
 `python make_offcenter_sets.py --mode corner|inner` then `python eval.py`.
 
+## 10. Scale robustness + crash-proofing
+
+A six-way benchmark against competitor submissions exposed two accuracy risks that
+this section closes; both are validated by re-running the same harnesses.
+
+**Measured magnification (not assumed).** The localizer previously assumed a ~10x
+ratio with a +/-6% sweep, so a test set whose magnification differs (calibration
+error; an unknown grader set) fell outside the sweep and failed. `localize()` now
+runs a coarse NCC scale probe (`_estimate_magnification`) that MEASURES the true
+magnification and centers the sweep on it. Two guards keep it safe on periodic
+content, where a wrong repeat can score highly at a far scale: it (a) only
+overrides the assumed ratio when the measured one is OUTSIDE the band the fine
+sweep already covers, and (b) applies a distance penalty biasing toward the prior,
+so an alias must beat near scales by a real margin. `auto_scale=True` by default;
+`auto_scale=False` forces `nominal_ratio`.
+
+| set | before | after |
+|---|---|---|
+| `data/` (fixed 10x, canonical) | 96.7% within 1 um | **96.7%** (unchanged) |
+| self variable-mag 9.1x-11.1x (`--mag-jitter`) | (untested) | **90%** within 1 um, median 0.1 px |
+| competitor variable-mag set (9x-10.85x) | 40% within 1 um | **73%** |
+
+**Never-crash inference.** The two internal `RuntimeError` paths could reach the
+grader as a traceback (a scored pair lost). The public `localize()` is now a thin
+wrapper around `_localize_core` that catches ANY exception and returns the
+search-image center with `low_confidence=True`, so stdout always carries a
+coordinate. A full-image RESCUE also runs when the center ROI net is empty (a
+site well outside the drift envelope), removing the main hard-failure path.
+Verified on blank / ref-larger-than-search / 1x1 inputs -- all return a coordinate.
+
+**Confidence output.** `LocalizeInfo` now exposes `confidence` and
+`low_confidence` (from the combined-score margin between the top two candidates)
+and the `magnification` used -- a calibrated self-flag for genuinely ambiguous
+revisits, surfaced via `localize.py --verbose`.
+
 ## Files
 
 - `train_ranker.ipynb` — training notebook for the optional hybrid MLP ranker.

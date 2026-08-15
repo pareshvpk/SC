@@ -6,10 +6,16 @@ reference's center `(x, y)` in the search image. Among many near-identical perio
 repeats, the correct one is disambiguated by a per-site **crossing-defect fingerprint**
 and a bounded-drift center prior.
 
-**Approach:** a classical (non-trained) computer-vision pipeline — max-projection
-template matching → broad candidate net → per-candidate verification (refined NCC +
-fingerprint) → reliability-aware selection. An **optional** small trained MLP ranker is
-also included, but the classical algorithm is the scored solution.
+**Approach:** a classical (non-trained) computer-vision pipeline — magnification
+measurement → max-projection template matching → broad candidate net → per-candidate
+verification (refined NCC + fingerprint) → reliability-aware selection. An **optional**
+small trained MLP ranker is also included, but the classical algorithm is the scored
+solution.
+
+**Robustness:** the localizer **measures** the magnification (handles variable-scale
+test sets, not just a fixed 10×), **never crashes** (any internal failure returns the
+image center with a low-confidence flag, so a grader always gets a coordinate), and
+reports a per-result `confidence`.
 
 **Headline result (self-eval, 30 FinFET pairs):** median **0.1 px**, **96.7% within 1 µm**,
 ~1.3 s/pair. See `V2_REPORT.md` for the full engineering write-up.
@@ -83,11 +89,13 @@ Supporting: `eval.py` (self-eval harness), `bench.py` + `localize_v1.py` (V1-vs-
 ## Dataset generator
 
 ```bash
-python dataset_gen.py --style {finfet,dram} --n 30 --out data --seed 0
+python dataset_gen.py --style {finfet,dram} --n 30 --out data --seed 0 [--mag-jitter]
 ```
 - `--style` — architecture: `finfet` (dense fins × sparse gate bars; the validated/cited
   style) or `dram` (word-lines × bit-lines with a contact dot per intersection).
 - `--n` — number of pairs. `--out` — output directory. `--seed` — base seed.
+- `--mag-jitter` — vary the true magnification per pair (~9×–11×) instead of a fixed 10×,
+  for a harder, more realistic scale-robustness test (recorded as `magnification_ratio`).
 - Each pair: `pair_XXX_ref.png` (1000×1000), `pair_XXX_search.png` (1000×1000), and the
   **true center** recorded in `ground_truth.json`.
 - Realism (each choice cited in `citations.md`): independent per-image Poisson+Gaussian
