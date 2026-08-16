@@ -57,7 +57,7 @@ NCC recalls every plausible repeat, then a position-independent **crossing-defec
 fingerprint** plus a bounded-drift center prior decide which repeat is the revisit.
 
 <div align="center">
-<img src="docs/images/architecture.png" width="620" alt="Drift-Sense localizer pipeline: magnification probe → max-projection response map → broad candidate net → per-candidate verification → reliability-aware selection → sub-pixel fit"/>
+<img src="docs/images/architecture.png" width="840" alt="Drift-Sense architecture: deliverables & data flow (dataset_gen.py → data/ → localize.py → eval.py); how one pair is made (die world → reference/search → SEM noise); localization pipeline (measure mag → NCC sweep → candidate net → verify → reliability → sub-pixel fit)"/>
 </div>
 
 **Reliability gate** — the fingerprint is decisive where crossing-defects carry
