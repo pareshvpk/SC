@@ -56,51 +56,9 @@ site), so candidate *generation* and candidate *selection* are deliberately spli
 NCC recalls every plausible repeat, then a position-independent **crossing-defect
 fingerprint** plus a bounded-drift center prior decide which repeat is the revisit.
 
-```
- reference (100×)        search (10×)
-      │                       │
-      ▼                       ▼
- ┌─────────────────────────────────────┐
- │ 0. Magnification probe                │  measure true ratio (not assumed 10×);
- │    _estimate_magnification()          │  center the scale sweep on it
- └─────────────────────────────────────┘
-      │
-      ▼
- ┌─────────────────────────────────────┐
- │ 1. Max-projection response map        │  per pixel: max NCC over the whole
- │    over (scale × rotation) sweep      │  (scale,rotation) sweep → each site
- │                                       │  scored at its OWN best transform
- └─────────────────────────────────────┘
-      │
-      ▼
- ┌─────────────────────────────────────┐
- │ 2. Broad candidate net                │  top-N local maxima, NMS radius
- │    (NMS radius < 1 lattice pitch)     │  < 1 pitch → adjacent repeats kept
- │                                       │  as SEPARATE candidates (pure recall)
- └─────────────────────────────────────┘
-      │
-      ▼
- ┌─────────────────────────────────────┐
- │ 3. Per-candidate verification         │  refined NCC (scale/rot/sub-pixel)
- │    at each site's best transform      │  + fin–gate crossing FINGERPRINT
- └─────────────────────────────────────┘
-      │
-      ▼
- ┌─────────────────────────────────────┐
- │ 4. Reliability-aware selection        │  gate the fingerprint by its own
- │    (a) decisive fingerprint           │  reliability, then choose:
- │    (b) unreliable → center prior      │  combined = z(NCC)
- │    (c) fused-z tie → center tie-break  │           + fp_gate·fp_weight·z(fp)
- └─────────────────────────────────────┘
-      │
-      ▼
- ┌─────────────────────────────────────┐
- │ 5. Sub-pixel parabolic fit            │  → (x, y) + confidence / low_confidence
- └─────────────────────────────────────┘
-      │
-      ▼
-   x, y  (+ confidence, magnification)
-```
+<div align="center">
+<img src="docs/images/architecture.png" width="620" alt="Drift-Sense localizer pipeline: magnification probe → max-projection response map → broad candidate net → per-candidate verification → reliability-aware selection → sub-pixel fit"/>
+</div>
 
 **Reliability gate** — the fingerprint is decisive where crossing-defects carry
 signal and misleading where they don't. Two signals (`fp_ref_std` = the reference's
