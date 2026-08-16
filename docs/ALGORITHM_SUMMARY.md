@@ -1,8 +1,8 @@
 # Drift-Sense — Algorithm Summary
 
-> For the full write-up — dataset design, V1 diagnosis, the reliability-aware V2
-> pipeline, the V1→V2 benchmark, held-out validation, parameters, and the honest
-> failure case — see **`V2_REPORT.md`**.
+> For the full write-up — dataset design, why plain cross-correlation fails, the
+> reliability-aware pipeline, held-out validation, parameters, and the honest
+> failure case — see **`REPORT.md`**.
 
 ## One-paragraph overview
 
@@ -10,8 +10,9 @@ Given a 100× reference close-up and a 10× wide-search image of the same **FinF
 die site (dense vertical fins crossed by 1–2 horizontal gate bars, with ~40 % of
 fin–gate crossings dropped as defects), return the reference's center `(x, y)` in
 search-image pixels; among periodic look-alikes, return the match nearest the
-search-image center. V2 stops using cross-correlation as both generator and
-selector. It builds a **max-projection NCC response map** (so the true site
+search-image center. The localizer does **not** use cross-correlation as both
+generator and selector (fatal on a periodic lattice — a wrong repeat out-scores
+the true site). It builds a **max-projection NCC response map** (so the true site
 appears at its best-transform score), takes a **broad candidate net** of
 spatially-distinct peaks, then **verifies each candidate independently** with a
 locally-refined NCC and a **fin–gate crossing fingerprint** (samples intensity at
@@ -23,21 +24,19 @@ NCC + center prior, and genuine ties are broken by center.
 
 ## Headline result (30-pair self-eval, realistic FinFET with mat superstructure)
 
-| | median px | <1 px | <1 µm | catastrophic (>100 px) |
-|---|---|---|---|---|
-| V1 (NCC + center) | 56.8 | 43.3 % | 53.3 % | 14 |
-| **V2** | **0.3** | **80.0 %** | **90.0 %** | **3** |
+| median px | <1 px | <1 µm | honest failures (>100 px) |
+|---|---|---|---|
+| **0.3** | **80.0 %** | **90.0 %** | **3 / 30** |
 
-The dataset now carries a realistic subarray-**mat superstructure** (dense cell
-blocks separated by sense-amp / driver channels -- looks like a real wafer array).
-The 3 remaining failures are all genuinely-hard cases: two `forced_periodic`
+The dataset carries a realistic subarray-**mat superstructure** (dense cell blocks
+separated by sense-amp / driver channels — looks like a real wafer array). The 3
+remaining failures are all genuinely-hard cases: two `forced_periodic`
 honest-failure crops and one crop that landed deep inside a mat interior (locally
 periodic, so ambiguous by construction).
 
 ## Files to review
 
-- `V2_REPORT.md` — the canonical engineering report (read this).
-- `localize.py` — V2 implementation, API `localize(ref, search) -> (x, y, info)`.
-- `bench.py` — reproduces the V1-vs-V2 table (`python bench.py`).
-- `localize_v1.py` — V1 snapshot used by the benchmark.
-- `dataset_gen.py`, `eval.py`, `citations.md` — dataset, self-eval harness, references.
+- `REPORT.md` — the canonical engineering report (read this).
+- `localize.py` — the localizer, API `localize(ref, search) -> (x, y, info)`.
+- `eval.py` — self-eval harness (`python eval.py --data data`).
+- `dataset_gen.py`, `citations.md` — dataset generator and references.

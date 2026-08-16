@@ -42,9 +42,9 @@ algorithm is the scored solution.
 - Reports a per-result `confidence`
 
 **Headline (self-eval, 30 realistic FinFET pairs w/ subarray-mat superstructure):**
-median **0.3 px**, **90 % within 1 µm**, ~1.7 s/pair — vs V1's 53 % (14 catastrophic failures).
+median **0.3 px**, **90 % within 1 µm**, ~1.7 s/pair.
 The 3 misses are genuinely-hard cases (mat-interior / forced-periodic crops).
-Full write-up: [`docs/V2_REPORT.md`](docs/V2_REPORT.md).
+Full write-up: [`docs/REPORT.md`](docs/REPORT.md).
 
 ---
 
@@ -69,7 +69,7 @@ routing each pair to regime (a), (b), or (c) above.
 **Robustness rails (never returns nothing):** the public `localize()` wraps the
 core in a try/except that returns the image center + `low_confidence` on *any*
 failure; a full-image RESCUE fires when the bounded-drift ROI net is empty. Details
-in [`docs/V2_REPORT.md`](docs/V2_REPORT.md) §2–§3, §10.
+in [`docs/REPORT.md`](docs/REPORT.md) §2–§3, §10.
 
 ---
 
@@ -83,11 +83,10 @@ SC/
 ├── requirements-train.txt training-only deps (scikit-learn)
 ├── LICENSE
 ├── data/                  ready-made 30-pair self-eval set (+ ground_truth.json)
-├── src/      ── core ──   localize.py (INFERENCE) · dataset_gen.py · eval.py · bench.py
-│                          localize_v1.py · ml_ranker.npz
+├── src/      ── core ──   localize.py (INFERENCE) · dataset_gen.py · eval.py · ml_ranker.npz
 ├── training/              hybrid-ML pipeline (train_ranker.* · make_ranker_data.py)
 ├── tools/                 predict overlay · selftest · off-center + blind test-set makers
-└── docs/                  V2_REPORT.md · ALGORITHM_SUMMARY.md · images/
+└── docs/                  REPORT.md · ALGORITHM_SUMMARY.md · images/
 ```
 
 > Run everything **from the repo root** (e.g. `python src/localize.py …`); scripts add `src/` to the path automatically.
@@ -147,7 +146,7 @@ $ python src/localize.py data/pair_006_ref.png data/pair_006_search.png
 | 6 | `requirements.txt` (pip freeze) | `requirements.txt` |
 | 7 | Citation document | `citations.md` |
 
-Supporting: `src/eval.py`, `src/bench.py` + `src/localize_v1.py`, `tools/` (predict, selftest,
+Supporting: `src/eval.py` (self-eval harness), `tools/` (predict, selftest,
 off-center + blind test-set makers), `docs/` (reports), `data/` (self-eval set).
 
 ---
@@ -176,7 +175,6 @@ Each pair: `pair_XXX_ref.png` (1000×1000), `pair_XXX_search.png` (1000×1000), 
 
 ```bash
 python src/eval.py --data data --tolerance_px 30   # per-pair error, timing, % within tolerance, honest failure
-python src/bench.py --data data                    # V1-vs-V2 comparison
 python tools/selftest.py --n 20                     # quick check on fresh, unseen pairs
 ```
 
@@ -185,29 +183,27 @@ python tools/selftest.py --n 20                     # quick check on fresh, unse
 ## 📈 Test results & measurements
 
 All numbers are reproducible with the commands above; full derivation in
-[`docs/V2_REPORT.md`](docs/V2_REPORT.md) §4–§11.
+[`docs/REPORT.md`](docs/REPORT.md) §4–§11.
 
-**Headline benchmark** — 30-pair self-eval, realistic subarray-mat superstructure
-(`python src/bench.py --data data`):
+**Headline result** — 30-pair self-eval, realistic subarray-mat superstructure
+(`python src/eval.py --data data`):
 
-| algorithm | median | mean | max | <1 px | <10 px | <1 µm (100 px) | >100 px | sec/pair |
-|---|---|---|---|---|---|---|---|---|
-| V1 (NCC + center prior) | 56.8 px | 100.4 px | 288.0 px | 43.3 % | 46.7 % | 53.3 % | 14 | 1.5 |
-| **V2 (this submission)** | **0.3 px** | **18.7 px** | 167.3 px | **80.0 %** | **83.3 %** | **90.0 %** | **3** | **1.7** |
+| median | mean | max | <1 px | <10 px | <1 µm (100 px) | honest failures (>100 px) | sec/pair |
+|---|---|---|---|---|---|---|---|
+| **0.3 px** | **18.7 px** | 167.3 px | **80.0 %** | **83.3 %** | **90.0 %** | **3 / 30** | **1.7** |
 
-V2 rescues 11 pairs from 130–300 px wrong-repeat errors to sub-pixel and cuts
-catastrophic failures **14 → 3**. The 3 residual misses are honest-failure cases by
-construction (defect-free forced-periodic crops + one mat interior); runtime is
-machine-dependent, so the V1/V2 ratio is the stable quantity.
+Sub-pixel on the great majority of pairs. The 3 residual misses are honest-failure
+cases by construction (defect-free forced-periodic crops + one mat interior);
+runtime is machine-dependent (~1.7 s/pair here).
 
 **Scale robustness** — the localizer *measures* magnification rather than assuming
-10×, so variable-mag sets no longer fall outside the sweep:
+10×, so variable-magnification sets are handled, not just a fixed 10×:
 
-| set | before | after |
-|---|---|---|
-| `data/` (fixed 10×, canonical) | 96.7 % within 1 µm | **96.7 %** (unchanged) |
-| self variable-mag 9.1×–11.1× (`--mag-jitter`) | — | **90 %** within 1 µm, median 0.1 px |
-| competitor variable-mag set (9×–10.85×) | 40 % within 1 µm | **73 %** |
+| set | within 1 µm |
+|---|---|
+| `data/` (fixed 10×, canonical) | **96.7 %** |
+| self variable-mag 9.1×–11.1× (`--mag-jitter`) | **90 %** (median 0.1 px) |
+| external variable-mag set (9×–10.85×) | **73 %** |
 
 **Off-center / drift-envelope stress** (30 pairs per band, `tools/make_offcenter_sets.py`):
 
@@ -247,7 +243,7 @@ The classical algorithm is the default and needs **no** model. An optional small
 - **Inference:** `python src/localize.py ref.png search.png --use-ml` — loads `src/ml_ranker.npz`, **pure-numpy** forward pass (no ML dep at inference).
 - **Retrain** (from `training/`): `pip install -r requirements-train.txt`, then `python make_ranker_data.py` and `jupyter notebook train_ranker.ipynb`.
 
-The hybrid *matches* (doesn't beat) classical accuracy — see [`docs/V2_REPORT.md`](docs/V2_REPORT.md) §8.
+The hybrid *matches* (doesn't beat) classical accuracy — see [`docs/REPORT.md`](docs/REPORT.md) §8.
 
 ---
 

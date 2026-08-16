@@ -1,7 +1,7 @@
 """
-Drift-Sense localization algorithm  --  V2 (candidate-generate + verify).
+Drift-Sense localization algorithm.
 
-Public API (unchanged):
+Public API:
 
     x, y, info = localize(ref_img, search_img)
 
@@ -12,23 +12,23 @@ If several regions match (the layout is highly periodic), return the one
 closest to the search-image center.
 
 ------------------------------------------------------------------------------
-WHY V2 EXISTS  (diagnosis of the V1 failure mode)
+WHY NOT PLAIN CROSS-CORRELATION
 ------------------------------------------------------------------------------
-V1 used normalized cross-correlation (NCC) both to *generate* and to *select*
-candidates. On a periodic FinFET lattice that is fatal: at any single fixed
+Using normalized cross-correlation (NCC) both to *generate* and to *select*
+candidates is fatal on a periodic FinFET lattice: at any single fixed
 (scale, rotation) trial, a wrong lattice repeat routinely out-scores the true
 site (measured: true site NCC ~0.35 vs a wrong repeat ~0.86 at a fixed trial).
-V1 also recorded each spatial peak's score from whichever single trial found
-it, and suppressed peaks within ~half a template width -- so the true site was
-frequently merged with, and discarded in favour of, a nearby higher-scoring
-wrong repeat. Result: a bimodal error distribution (either exact, or locked
-onto a repeat 100-250 px away).
+Recording each spatial peak's score from whichever single trial found it, and
+suppressing peaks within ~half a template width, merges the true site with --
+and discards it in favour of -- a nearby higher-scoring wrong repeat. That
+produces a bimodal error distribution (either exact, or locked onto a repeat
+100-250 px away).
 
-Two empirical facts drove the V2 redesign (both measured on the dataset):
+Two empirical facts drive the design (both measured on the dataset):
 
   1. At its OWN best (scale, rotation), the true site is the strongest local
-     match 19/19 times on the pairs V1 got wrong. So the signal is there; V1
-     simply never scored each site at its best transform.
+     match 19/19 times on the otherwise-failing pairs. So the signal is there;
+     it just has to be scored at each site's best transform.
 
   2. A fin-gate crossing "fingerprint" -- sampling intensity exactly at the
      grid intersections, where the local crossing-defect variation lives --
@@ -36,7 +36,7 @@ Two empirical facts drove the V2 redesign (both measured on the dataset):
      INDEPENDENT vote that does not share NCC's periodicity blind spot.
 
 ------------------------------------------------------------------------------
-V2 PIPELINE
+PIPELINE
 ------------------------------------------------------------------------------
   reference
      |
@@ -79,12 +79,11 @@ V2 PIPELINE
      v
   (6) SUB-PIXEL refinement via parabolic fit on the local correlation surface.
 
-Benchmark (30-pair self-eval, deliberately-hard FinFET set, see bench.py):
-    V1: 43% within 1 px, median 61 px, 13 catastrophic (>100 px) failures.
-    V2: 83% within 1 px, median  0 px,  1 catastrophic failure (the forced-
-        periodic, defect-free pair that carries no fingerprint by design and
-        whose true site sits farther from center than a look-alike repeat --
-        the intended honest-failure case). Held-out seed: 93% within 1 um.
+Result (30-pair self-eval, deliberately-hard FinFET set, see eval.py):
+    83% within 1 px, median 0.3 px, 90% within 1 um. The few misses are the
+    forced-periodic, defect-free pairs that carry no fingerprint by design and
+    whose true site sits farther from center than a look-alike repeat -- the
+    intended honest-failure cases. Held-out seed: 93% within 1 um.
 """
 from __future__ import annotations
 
