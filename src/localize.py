@@ -198,8 +198,12 @@ def _estimate_magnification(ref_f: np.ndarray, search_f: np.ndarray,
     on 4x-downsampled images. This is what lets the localizer survive a test set
     whose magnification differs from the assumed ~10x (see report robustness study).
     """
-    rs = search_f  # full detail: downsampling destroys the dense fin pitch and the
-                   # coarse probe then aliases across scales on periodic content.
+    # 2x-downsample the search for the probe: ~4x faster, and the distance penalty
+    # + keep_band gate below tolerate the slightly coarser scale estimate (the fine
+    # sweep in localize() re-centres precisely). Falls back to full-res if tiny.
+    ds = 2 if min(search_f.shape) >= 400 else 1
+    rs = cv2.resize(search_f, (search_f.shape[1] // ds, search_f.shape[0] // ds),
+                    interpolation=cv2.INTER_AREA) if ds > 1 else search_f
     grid = np.linspace(nominal * (1.0 - rel_band), nominal * (1.0 + rel_band), n)
     nom_idx = int(np.argmin(np.abs(grid - nominal)))  # grid point closest to the prior
     # A wrong periodic repeat can score highly at a FAR scale (scale aliasing). Bias
@@ -211,8 +215,8 @@ def _estimate_magnification(ref_f: np.ndarray, search_f: np.ndarray,
     for k, m in enumerate(grid):
         if m <= 1e-3:
             continue
-        tw = max(8, int(round(ref_f.shape[1] / m)))
-        th = max(8, int(round(ref_f.shape[0] / m)))
+        tw = max(8, int(round(ref_f.shape[1] / (m * ds))))
+        th = max(8, int(round(ref_f.shape[0] / (m * ds))))
         if tw >= rs.shape[1] or th >= rs.shape[0]:
             continue
         t = cv2.resize(ref_f, (tw, th), interpolation=cv2.INTER_AREA)
@@ -660,12 +664,6 @@ def _localize_core(
         strong_outside = outside_probe_best > roi_probe_best * (1.0 + fallback_margin)
         weak_roi = roi_best < 0.4
         few_cands = len(cand_pts) < 5
-        # `always_full_search` removes the drift-ROI "dead zone": a true site just
-        # beyond the ROI (or in the trigger's boundary band) was previously never
-        # made a candidate, so it could not be selected even by the fingerprint.
-        # Always augmenting with the cheap probe-transform full-image net makes the
-        # true site a candidate REGARDLESS of position; the center rule remains only
-        # a soft tie-break, so realistic center-clustered accuracy is unaffected.
         if always_full_search or strong_outside or weak_roi or few_cands:
             fallback_used = True
             fallback_reason = ("weak_roi" if weak_roi else

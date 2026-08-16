@@ -20,16 +20,41 @@ reports a per-result `confidence`.
 **Headline result (self-eval, 30 realistic FinFET pairs with subarray-mat
 superstructure):** median **0.3 px**, **90% within 1 µm**, ~1.7 s/pair — vs V1's 53%
 (and 14 catastrophic failures). The 3 misses are genuinely-hard cases (mat-interior
-/ forced-periodic crops). See `V2_REPORT.md` for the full engineering write-up.
+/ forced-periodic crops). See `docs/V2_REPORT.md` for the full engineering write-up.
 
 ---
+
+## Project structure
+
+```
+├── README.md              this file
+├── citations.md           all references (30% "augmentation" criterion)
+├── requirements.txt       pip freeze (inference deps)
+├── requirements-train.txt training-only deps (scikit-learn)
+├── LICENSE
+├── data/                  ready-made 30-pair self-eval set (+ ground_truth.json)
+├── src/                   core code — run everything from the repo root
+│   ├── localize.py          THE inference script  (python src/localize.py ref search)
+│   ├── dataset_gen.py       synthetic dataset generator
+│   ├── eval.py              self-eval harness
+│   ├── bench.py             V1-vs-V2 benchmark
+│   ├── localize_v1.py       V1 snapshot (for the benchmark)
+│   └── ml_ranker.npz        optional trained-MLP weights (numpy inference)
+├── training/              optional hybrid-ML training pipeline
+│   ├── train_ranker.ipynb / train_ranker.py / make_ranker_data.py / ranker_data.npz
+├── tools/                 helpers (predict overlay, selftest, off-center + blind test sets)
+└── docs/                  V2_REPORT.md, ALGORITHM_SUMMARY.md
+```
+
+All commands are run **from the repo root** (e.g. `python src/localize.py ...`); the
+scripts add `src/` to the path automatically.
 
 ## Quick start (clone → generate → localize, no contact needed)
 
 ```bash
 # 1. Clone
 git clone <this-repo-url>
-cd driftsense
+cd SC
 
 # 2. Create an environment and install dependencies
 python -m venv .venv
@@ -38,11 +63,11 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # 3. Generate a sample image pair (or a full 30-pair set) WITH ground truth
-python dataset_gen.py --style finfet --n 1 --out sample        # one pair
+python src/dataset_gen.py --style finfet --n 1 --out sample    # one pair
 #   -> sample/pair_000_ref.png, sample/pair_000_search.png, sample/ground_truth.json
 
 # 4. Run the localization inference script (THE script Applied Materials runs)
-python localize.py sample/pair_000_ref.png sample/pair_000_search.png
+python src/localize.py sample/pair_000_ref.png sample/pair_000_search.png
 #   -> prints:  x, y      e.g.  511.94, 518.40
 ```
 
@@ -53,7 +78,7 @@ That's it — no manual edits required.
 ## The inference script (most important file)
 
 ```bash
-python localize.py <reference_image> <search_image>
+python src/localize.py <reference_image> <search_image>
 ```
 - **Inputs:** path to the reference (high-mag) image, path to the search (wide, low-mag) image.
 - **Output (stdout):** a single predicted center as `x, y` in search-image pixels.
@@ -63,7 +88,7 @@ python localize.py <reference_image> <search_image>
 
 Example:
 ```bash
-$ python localize.py data/pair_006_ref.png data/pair_006_search.png
+$ python src/localize.py data/pair_006_ref.png data/pair_006_search.png
 660.20, 512.05
 ```
 
@@ -74,24 +99,25 @@ $ python localize.py data/pair_006_ref.png data/pair_006_search.png
 | # | Requirement | File(s) |
 |---|---|---|
 | 1 | README with setup/run instructions | `README.md` (this file) |
-| 2 | Dataset generator (`--style`, `--n`, `--out`; records ground truth) | **`dataset_gen.py`** |
-| 3 | **Localization inference script** (ref + search → `x, y`) | **`localize.py`** |
-| 4 | DL model weights (optional hybrid) | `ml_ranker.npz` |
-| 5 | Training script / notebook (optional hybrid) | `train_ranker.ipynb`, `train_ranker.py`, `make_ranker_data.py` |
+| 2 | Dataset generator (`--style`, `--n`, `--out`; records ground truth) | **`src/dataset_gen.py`** |
+| 3 | **Localization inference script** (ref + search → `x, y`) | **`src/localize.py`** |
+| 4 | DL model weights (optional hybrid) | `src/ml_ranker.npz` |
+| 5 | Training script / notebook (optional hybrid) | `training/train_ranker.ipynb`, `training/train_ranker.py`, `training/make_ranker_data.py` |
 | 6 | `requirements.txt` (pip freeze) | `requirements.txt` |
 | 7 | Citation document | `citations.md` |
 
-Supporting: `eval.py` (self-eval harness), `bench.py` + `localize_v1.py` (V1-vs-V2 benchmark),
-`make_offcenter_sets.py` (drift-robustness study), `predict.py` (visual overlay helper),
-`selftest.py` (quick unseen-data check), `V2_REPORT.md` / `ALGORITHM_SUMMARY.md` (write-ups),
-`data/` (a ready-made 30-pair FinFET eval set), `requirements-train.txt` (training-only deps).
+Supporting: `src/eval.py` (self-eval harness), `src/bench.py` + `src/localize_v1.py` (V1-vs-V2
+benchmark), `tools/make_offcenter_sets.py` + `tools/make_blind_set.py` (drift / positional
+robustness sets), `tools/predict.py` (visual overlay helper), `tools/selftest.py` (quick
+unseen-data check), `docs/V2_REPORT.md` / `docs/ALGORITHM_SUMMARY.md` (write-ups),
+`data/` (a ready-made 30-pair self-eval set), `requirements-train.txt` (training-only deps).
 
 ---
 
 ## Dataset generator
 
 ```bash
-python dataset_gen.py --style {finfet,dram} --n 30 --out data --seed 0 [--mag-jitter]
+python src/dataset_gen.py --style {finfet,dram} --n 30 --out data --seed 0 [--mag-jitter] [--superstructure]
 ```
 - `--style` — architecture: `finfet` (dense fins × sparse gate bars; the validated/cited
   style) or `dram` (word-lines × bit-lines with a contact dot per intersection).
@@ -112,13 +138,13 @@ python dataset_gen.py --style {finfet,dram} --n 30 --out data --seed 0 [--mag-ji
 ## Evaluate (measure accuracy against ground truth)
 
 ```bash
-python eval.py --data data --tolerance_px 30
+python src/eval.py --data data --tolerance_px 30
 ```
 Reports per-pair error, timing, % within tolerance, and one honest failure case.
 
 ```bash
-python bench.py --data data     # V1-vs-V2 comparison
-python selftest.py --n 20       # quick check on fresh, unseen pairs
+python src/bench.py --data data     # V1-vs-V2 comparison
+python tools/selftest.py --n 20     # quick check on fresh, unseen pairs
 ```
 
 ---
@@ -128,16 +154,17 @@ python selftest.py --n 20       # quick check on fresh, unseen pairs
 The classical algorithm is the default and needs **no** model. An optional small MLP
 (`14→16→8→1`) can rank candidates instead:
 
-- **Inference:** `python localize.py ref.png search.png --use-ml` — loads `ml_ranker.npz`
-  and runs a **pure-numpy** forward pass (no ML dependency at inference).
-- **Retrain:**
+- **Inference:** `python src/localize.py ref.png search.png --use-ml` — loads
+  `src/ml_ranker.npz` and runs a **pure-numpy** forward pass (no ML dependency at inference).
+- **Retrain** (run from the `training/` folder):
   ```bash
-  pip install -r requirements-train.txt      # adds scikit-learn (training only)
+  pip install -r requirements-train.txt              # adds scikit-learn (training only)
+  cd training
   python make_ranker_data.py --n_train 200 --n_test 40   # -> ranker_data.npz
-  jupyter notebook train_ranker.ipynb        # trains + exports ml_ranker.npz
+  jupyter notebook train_ranker.ipynb                # trains + exports ml_ranker.npz
   ```
 
-The hybrid matches (does not beat) the classical accuracy — see `V2_REPORT.md` §8.
+The hybrid matches (does not beat) the classical accuracy — see `docs/V2_REPORT.md` §8.
 
 ---
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse, json, os
 from dataclasses import asdict
 import cv2, numpy as np
+import os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 from dataset_gen import generate_pair, SEARCH_FOV_NM, REF_FOV_NM
 
 # max drift that still keeps the whole 1 um crop inside the 10 um FOV

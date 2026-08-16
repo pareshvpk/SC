@@ -14,6 +14,8 @@ from __future__ import annotations
 import argparse
 import numpy as np
 
+import os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 from dataset_gen import generate_pair
 from localize import localize, candidate_features
 

@@ -9,6 +9,8 @@ analysis, so a localizer (or reviewer) gets no positional hint.
 from __future__ import annotations
 import argparse, json, os
 import numpy as np, cv2
+import os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 from dataset_gen import generate_pair, SEARCH_NM_PER_PX
 
 # radial zone -> (min, max) distance of the true site from frame center, in search px

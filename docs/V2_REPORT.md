@@ -219,14 +219,24 @@ three distance bands from center (`make_offcenter_sets.py`, 30 pairs each):
   near the ROI edge the comparative full-image fallback stays silent (the central
   region still matches well), whereas at the extreme corners the central match is
   poor enough to trigger the fallback, which then recovers the site.
-- `always_full_search=True` closes part of the gap (corner 57→73 %) by always
-  generating a full-image candidate net, but it costs ~3–4 % on the realistic
-  center case (a spurious far repeat can occasionally win). **No free lunch.**
+- `always_full_search=True` always generates a full-image candidate net, closing
+  much of the off-center gap (blind uniform-placement set: 77 % → 90 %), but it
+  costs ~4 % on the realistic center case (a spurious far repeat can occasionally
+  win) and roughly triples runtime on mat data (the full-image search fires far
+  more often). **No free lunch.**
 
-**Decision:** default is the center-optimized path (matches the stated bounded-
-drift physics and maximizes the scored metric); `always_full_search=True` is an
-opt-in knob for when the drift envelope proves wide. Reproduce with
-`python make_offcenter_sets.py --mode corner|inner` then `python eval.py`.
+**Decision:** default is the fast, center-optimized path, which matches the brief's
+stated bounded-drift physics — the tool "lands a short drift" from the site, and
+the mandatory "return the match nearest the center" tie-break is only meaningful
+when the true site is near center. `always_full_search=True` is an opt-in knob for
+if the official placement turns out to be uniform across the frame (measured
+trade-off: +13 pts on uniform placement, −4 pts on center, ~3× runtime). An
+adaptive identity-confidence trigger (fire the full search when the ROI best has a
+weak fingerprint) was prototyped and recovers most of the uniform-placement gain at
+no center-accuracy cost, but over-fires on the mat superstructure (where fingerprints
+are often weak), so it is left out of the default to keep runtime competitive.
+Reproduce with `python make_offcenter_sets.py --mode corner|inner` or
+`python make_blind_set.py`, then `python eval.py`.
 
 ## 10. Scale robustness + crash-proofing
 
