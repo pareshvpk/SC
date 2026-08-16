@@ -15,9 +15,11 @@ periodic semiconductor die — even when the layout is a wall of near-identical 
 
 <br>
 
-<img src="docs/images/result.png" width="760" alt="Localization result: reference located inside the search image to 0.37 px"/>
+<img src="docs/images/finfet_result.png" width="235" alt="FinFET localization result"/>
+<img src="docs/images/dram_result.png" width="235" alt="DRAM localization result"/>
+<img src="docs/images/rgb_result.png" width="235" alt="RGB optical localization result"/>
 
-*Reference located inside a wafer-realistic search image — **0.37 px** error. 🎯*
+*Reference (green inset) located inside the search image for **FinFET**, **DRAM**, and **RGB** — three different sites, all sub-pixel. 🎯*
 
 </div>
 
@@ -128,7 +130,7 @@ off-center + blind test-set makers), `docs/` (reports), `data/` (self-eval set).
 ## 🧪 Dataset generator
 
 <div align="center">
-<img src="docs/images/dataset_samples.png" width="740" alt="DRAM-style and FinFET-style wafer-realistic samples"/>
+<img src="docs/images/dataset_samples.png" width="460" alt="DRAM-style and FinFET-style wafer-realistic samples"/>
 </div>
 
 ```bash
