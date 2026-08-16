@@ -19,7 +19,7 @@ periodic semiconductor die — even when the layout is a wall of near-identical 
 <img src="docs/images/dram_result.png" width="235" alt="DRAM localization result"/>
 <img src="docs/images/rgb_result.png" width="235" alt="RGB optical localization result"/>
 
-*Reference (green inset) located inside the search image for **FinFET**, **DRAM**, and **RGB** — three different sites, all sub-pixel. 🎯*
+*Reference (green inset) located inside the search image for **FinFET**, **DRAM**, and **RGB** — three different sites, all sub-pixel.*
 
 </div>
 
@@ -36,12 +36,12 @@ template matching → broad candidate net → per-candidate verification (refine
 reliability-aware selection. An **optional** small trained MLP ranker is included, but the classical
 algorithm is the scored solution.
 
-**Why it's robust** 🛡️
-- 📏 **Measures** the magnification (handles variable-scale test sets, not just a fixed 10×)
-- 🧯 **Never crashes** — any internal failure returns the image center with a low-confidence flag, so a grader *always* gets a coordinate
-- 🎚️ Reports a per-result `confidence`
+**Why it's robust**
+- **Measures** the magnification (handles variable-scale test sets, not just a fixed 10×)
+- **Never crashes** — any internal failure returns the image center with a low-confidence flag, so a grader *always* gets a coordinate
+- Reports a per-result `confidence`
 
-**📈 Headline (self-eval, 30 realistic FinFET pairs w/ subarray-mat superstructure):**
+**Headline (self-eval, 30 realistic FinFET pairs w/ subarray-mat superstructure):**
 median **0.3 px**, **90 % within 1 µm**, ~1.7 s/pair — vs V1's 53 % (14 catastrophic failures).
 The 3 misses are genuinely-hard cases (mat-interior / forced-periodic crops).
 Full write-up: [`docs/V2_REPORT.md`](docs/V2_REPORT.md).
@@ -89,7 +89,7 @@ python src/localize.py sample/pair_000_ref.png sample/pair_000_search.png
 #   ->  511.94, 518.40
 ```
 
-✅ No manual edits required.
+No manual edits required.
 
 ---
 
@@ -139,7 +139,7 @@ python src/dataset_gen.py --style {finfet,dram} --n 30 --out data --seed 0 [--ma
 - `--style` — `finfet` (dense fins × sparse gate bars) or `dram` (word/bit-lines + contact dots).
 - `--mag-jitter` — vary the true magnification (~9×–11×) for a scale-robustness test.
 - `--superstructure` — realistic subarray **mats** (sense-amp + driver channels); on by default for `data/`.
-- `--rgb` — 🌈 **bonus:** 3-channel RGB optical-microscope pairs (localized at ~parity with grayscale).
+- `--rgb` — **bonus:** 3-channel RGB optical-microscope pairs (localized at ~parity with grayscale).
 - Realism (each choice cited in [`citations.md`](citations.md)): independent Poisson+Gaussian noise
   (search noisier), SEM edge-brightening, per-image blur/rotation/scale jitter, pitch jitter, defect dropout.
 
