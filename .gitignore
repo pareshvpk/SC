@@ -37,3 +37,28 @@ blind_test_dram/
 blind_sample/
 blind_sample_dram/
 *_zones_hidden.json
+
+# competitor comparison + training data + generated test images (do not commit)
+amehr_train_dram/
+amehr_train_finfet/
+comp_both/
+comp_dram/
+comp_finfet/
+comp_optical/
+holdout_set/
+home_set/
+neutral_set/
+ranker_data.npz
+src/ml_ranker.npz.*
+
+# comparison / testing harness scripts
+tools/bakeoff.py
+tools/headtohead.py
+tools/foreign_gen.py
+tools/holdout_gen.py
+tools/perf_validate.py
+tools/score_amehr.py
+tools/test_recall.py
+tools/diag_envelope.py
+tools/diag_landmark.py
+tools/diag_landmark_rot.py

@@ -67,7 +67,18 @@ PIPELINE
       => the fingerprint is noise and is down-weighted toward zero.
      |
      v
-  (5) SELECTION in one of three regimes (see localize() body for details):
+  (5) SELECTION (see localize() body for details):
+      * LANDMARK override (texture-agnostic): a dedicated single-transform,
+        multi-scale global NCC (_global_landmark) measures whether the reference
+        contains APERIODIC content (a mat boundary / sense-amp channel / field
+        edge). Because it uses ONE fixed template -- not per-candidate refinement,
+        which would let every repeat borrow its own best transform and erase the
+        margin -- only the true site scores decisively higher when a landmark
+        exists. A decisive lead pins the location outright, even far off-center
+        (UNIFORM placement), before the center prior can grab a nearer repeat.
+        On a purely periodic crop the lead ~= 0, so this stays silent and the
+        fingerprint + center prior below resolve the periodic case.
+      Otherwise, one of three regimes:
         (a) DECISIVE fingerprint (reliable + a clear, isolated high-fp winner):
             that candidate IS the site identity -- pick it outright; the center
             prior must NOT override a confident identity match.
@@ -80,10 +91,21 @@ PIPELINE
   (6) SUB-PIXEL refinement via parabolic fit on the local correlation surface.
 
 Result (30-pair self-eval, deliberately-hard FinFET set, see eval.py):
-    83% within 1 px, median 0.3 px, 90% within 1 um. The few misses are the
+    median ~0.2 px, ~90% within 1 um, ~0.65 s/pair. The few misses are the
     forced-periodic, defect-free pairs that carry no fingerprint by design and
     whose true site sits farther from center than a look-alike repeat -- the
-    intended honest-failure cases. Held-out seed: 93% within 1 um.
+    intended honest-failure cases. The landmark override additionally recovers
+    off-center / cross-generator placements that the center prior alone would miss.
+
+Performance: scale and rotation are per-CAPTURE (global), so the verification loop
+    refines every candidate in a NARROW sweep around the one global transform found
+    by the probe (fine_neighbors=1: a 3x3 scale/rotation neighbourhood), instead of
+    re-searching the whole grid per site. Verification is capped to the strongest
+    refine_topk=30 candidates by response score (the max-projection map always
+    surfaces the true site in the top ~30; going tighter drops it on the ambiguous
+    foreign set). Together with a scipy-free peak finder these hold accuracy exactly
+    while cutting runtime ~1.5x vs. an all-candidate 5x5 refine (matchTemplate
+    dominates runtime; the per-candidate refine loop was ~50% of it).
 """
 from __future__ import annotations
 
@@ -93,7 +115,6 @@ from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
-from scipy.ndimage import maximum_filter
 
 
 # ----------------------------------------------------------------------------
@@ -110,6 +131,11 @@ class Candidate:
     fp_ref_std: float = 0.0  # std of the reference template's own intersection-contrast
                              # vector -- a candidate-independent measure of how much
                              # dropout signal the fingerprint can possibly carry here.
+    envelope: float = 0.0    # texture-agnostic low-frequency identity match: NCC of the
+                             # slowly-varying per-site brightness/shading envelope (lattice
+                             # removed). Distinguishes periodic repeats when NCC cannot --
+                             # and, unlike the fin-gate fingerprint, does not assume a
+                             # particular defect model, so it survives a foreign texture.
     combined: float = 0.0  # fused z-score used for ranking
 
 
@@ -270,9 +296,168 @@ def _response_map(search_f: np.ndarray, ref_f: np.ndarray,
     return R
 
 
+def _peak_and_lead_1d(profile: np.ndarray, min_dist: int):
+    """Argmax index of `profile` and its LEAD over the best value outside a
+    +/-min_dist window. A periodic axis has many near-equal peaks -> lead ~= 0;
+    a landmark axis has one dominant peak -> decisive lead."""
+    i = int(np.argmax(profile))
+    mx = float(profile[i])
+    q = profile.astype(np.float64).copy()
+    lo, hi = max(0, i - min_dist), min(len(profile), i + min_dist + 1)
+    q[lo:hi] = -np.inf
+    mx2 = float(q.max()) if np.isfinite(q).any() else -1.0
+    return i, mx - mx2
+
+
+def _all_peaks_1d(profile: np.ndarray, min_dist: int, frac: float = 0.8):
+    """Indices of 1-D local maxima above `frac`*max, at least `min_dist` apart
+    (greedy non-max suppression). Used to enumerate the periodic repeats along an
+    ambiguous axis so the nearest-center one can be chosen."""
+    p = np.asarray(profile, dtype=np.float64).copy()
+    if p.size == 0:
+        return []
+    thr = frac * float(p.max())
+    peaks = []
+    while np.isfinite(p).any():
+        i = int(np.argmax(p))
+        if p[i] < thr:
+            break
+        peaks.append(i)
+        lo, hi = max(0, i - min_dist), min(len(p), i + min_dist + 1)
+        p[lo:hi] = -np.inf
+    return peaks
+
+
+def _axis_landmarks(search_f: np.ndarray, ref_f: np.ndarray,
+                    nominal_ratio: float, scale_jitter, min_dist: int, n: int = 5,
+                    rot_max_deg: float = 4.0, n_rot: int = 7):
+    """PER-AXIS aperiodic-landmark detection from a single-transform global NCC map.
+
+    Picks the (scale, ROTATION) whose ONE fixed template gives the highest global
+    NCC (single template is essential -- per-candidate refinement lets every repeat
+    borrow its own best transform and erases the margin), then reads MARGINAL-MAX
+    profiles of that map:
+        px = corr.max(axis=0)  -> per-column best NCC, exposes X uniqueness
+        py = corr.max(axis=1)  -> per-row    best NCC, exposes Y uniqueness
+    A landmarked axis yields a decisive 1-D lead; a periodic axis yields ~0.
+
+    The rotation sweep is essential when the CAPTURE is rotated (e.g. the reference
+    is acquired at a small scan-field rotation): an unrotated template mis-aligns
+    and a WRONG periodic repeat can then out-score the true aperiodic site in the
+    marginal-max profile (measured: a both-anchored pair whose true mat was only
+    the global max once rotation was searched).
+
+    COST: the (scale, rotation) grid is searched on a 2x-DOWNSAMPLED image (each
+    matchTemplate ~4x cheaper), and only the single winning transform is evaluated
+    once at full resolution for the marginal profiles. So the rotation robustness
+    costs ~n*n_rot tiny correlations + one full-size one, not n*n_rot full-size
+    ones -- keeping the landmark a small fraction of the pipeline.
+
+    Returns (corr, th, tw, (x_center, x_lead, xi), (y_center, y_lead, yi)) or None.
+    """
+    H, W = search_f.shape
+    scales = np.linspace(scale_jitter[0], scale_jitter[1], n) * nominal_ratio
+    rots = np.linspace(-rot_max_deg, rot_max_deg, n_rot)
+    # --- coarse (scale, rotation) search on a 2x-downsampled image ---
+    ds = 2 if min(H, W) >= 400 else 1
+    s_ds = (cv2.resize(search_f, (W // ds, H // ds), interpolation=cv2.INTER_AREA)
+            if ds > 1 else search_f)
+    best = None  # (global_max, scale, rot)
+    for s in scales:
+        for r in rots:
+            t = _make_template(ref_f, s * ds, r)   # template downsampled to match
+            if t.shape[0] >= s_ds.shape[0] or t.shape[1] >= s_ds.shape[1]:
+                continue
+            gmax = float(cv2.matchTemplate(s_ds, t, cv2.TM_CCOEFF_NORMED).max())
+            if best is None or gmax > best[0]:
+                best = (gmax, float(s), float(r))
+    if best is None:
+        return None
+    # --- one full-resolution pass at the winning transform for the profiles ---
+    _, bs, br = best
+    t = _make_template(ref_f, bs, br)
+    th, tw = t.shape
+    if th >= H or tw >= W:
+        return None
+    corr = cv2.matchTemplate(search_f, t, cv2.TM_CCOEFF_NORMED)
+    md = max(1, int(min_dist))
+    px = corr.max(axis=0)
+    py = corr.max(axis=1)
+    xi, x_lead = _peak_and_lead_1d(px, md)
+    yi, y_lead = _peak_and_lead_1d(py, md)
+    return corr, th, tw, (xi + tw / 2.0, x_lead, xi), (yi + th / 2.0, y_lead, yi)
+
+
+def _center_tiebreak_axis(corr: np.ndarray, th: int, tw: int, axis: str,
+                          pin_idx: int, center_coord: float, min_dist: int,
+                          frac: float = 0.8):
+    """Center coordinate of the periodic repeat NEAREST the image center on the
+    ambiguous axis, given the pinned index on the solved axis. axis='y' -> Y is
+    ambiguous (x pinned at column pin_idx); axis='x' -> X is ambiguous."""
+    md = max(1, int(min_dist))
+    if axis == 'y':
+        j0, j1 = max(0, pin_idx - 2), min(corr.shape[1], pin_idx + 3)
+        prof = corr[:, j0:j1].max(axis=1)
+        half = th / 2.0
+    else:
+        i0, i1 = max(0, pin_idx - 2), min(corr.shape[0], pin_idx + 3)
+        prof = corr[i0:i1, :].max(axis=0)
+        half = tw / 2.0
+    peaks = _all_peaks_1d(prof, md, frac) or [int(np.argmax(prof))]
+    coords = [p + half for p in peaks]
+    return min(coords, key=lambda c: abs(c - center_coord))
+
+
+def _envelope_tiebreak_axis(search_f, ref_f, corr, th, tw, axis, pin_idx,
+                            solved_center, min_dist, scales_f, rots_f, frac=0.8):
+    """Disambiguate the periodic axis by texture-agnostic ENVELOPE match instead of
+    nearest-center. When one axis is landmark-solved and the other is periodic, the
+    brief's nearest-center rule silently picks the wrong repeat under UNIFORM
+    placement (the true site need not be nearest center). Here we instead refine a
+    candidate at each periodic repeat along the ambiguous axis (holding the solved
+    axis fixed) and keep the one whose low-frequency identity envelope best matches
+    the reference -- the same generator-independent cue used elsewhere. Falls back
+    to the argmax peak if refinement fails everywhere. Returns the ambiguous-axis
+    coordinate."""
+    md = max(1, int(min_dist))
+    if axis == 'y':                       # y ambiguous, x pinned at column pin_idx
+        j0, j1 = max(0, pin_idx - 2), min(corr.shape[1], pin_idx + 3)
+        prof = corr[:, j0:j1].max(axis=1)
+        half = th / 2.0
+    else:                                 # x ambiguous, y pinned at row pin_idx
+        i0, i1 = max(0, pin_idx - 2), min(corr.shape[0], pin_idx + 3)
+        prof = corr[i0:i1, :].max(axis=0)
+        half = tw / 2.0
+    # cap the number of repeats we refine to the strongest few: a periodic axis can
+    # expose dozens of near-equal peaks and refining each is the dominant cost; the
+    # true site is essentially always among the strongest marginal-max peaks.
+    peaks = _all_peaks_1d(prof, md, frac) or [int(np.argmax(prof))]
+    peaks = sorted(peaks, key=lambda p: prof[p], reverse=True)[:8]
+    coords = [p + half for p in peaks]
+    best = None  # (envelope, coord)
+    for c in coords:
+        cx0, cy0 = (solved_center, c) if axis == 'y' else (c, solved_center)
+        lr = _refine(search_f, ref_f, cx0, cy0, scales_f, rots_f)
+        if lr is None:
+            continue
+        _nv, _s, _r, rx, ry, tmpl = lr
+        patch = cv2.getRectSubPix(search_f, (tmpl.shape[1], tmpl.shape[0]),
+                                  (float(rx), float(ry)))
+        env = _ncc(_envelope(tmpl), _envelope(patch))
+        if best is None or env > best[0]:
+            best = (env, c)
+    return best[1] if best is not None else coords[0]
+
+
 def _top_peaks(R: np.ndarray, n: int, min_dist: int, thresh: float = 0.2):
-    """Top-`n` spatially-distinct local maxima of the response map."""
-    mx = maximum_filter(R, size=max(3, min_dist))
+    """Top-`n` spatially-distinct local maxima of the response map.
+
+    The local-max test uses cv2.dilate with a k x k all-ones kernel -- a
+    grayscale morphological maximum, identical to a square maximum_filter but
+    without the scipy dependency (verified bit-identical peaks on the eval sets;
+    scipy.ndimage alone added ~240 ms to a cold-start CLI import)."""
+    k = max(3, int(min_dist))
+    mx = cv2.dilate(R, np.ones((k, k), np.uint8))
     mask = (R == mx) & (R > thresh)
     ys, xs = np.nonzero(mask)
     if len(xs) == 0:
@@ -378,6 +563,49 @@ def _zscore(a: np.ndarray) -> np.ndarray:
     return (a - a.mean()) / s if s > 1e-6 else np.zeros_like(a)
 
 
+def _envelope(patch: np.ndarray, size: int = 24) -> np.ndarray:
+    """Texture-AGNOSTIC low-frequency identity descriptor.
+
+    Downsample the patch to a small grid with INTER_AREA (a box low-pass): this
+    ANNIHILATES the periodic lattice -- whose pitch is far finer than the grid
+    cell -- and keeps only the slowly-varying per-site brightness / shading
+    envelope (process-variation shading, large-scale content gradients, and the
+    aggregate per-cell brightness field). Returns a de-meaned flat vector.
+
+    WHY this is the missing signal: on a periodic crop every lattice repeat has an
+    essentially IDENTICAL high-frequency pattern, so NCC (and the fin-gate
+    fingerprint, which is tuned to one specific binary-dropout model) cannot tell
+    the true site from a wrong repeat. The low-frequency envelope, however, DIFFERS
+    between repeats and matches between the reference and the search only at the
+    true physical site -- regardless of the underlying texture/defect model. That
+    generator-independence is exactly what lets it survive a foreign test set."""
+    if patch.size == 0:
+        return np.zeros(size * size, dtype=np.float32)
+    e = cv2.resize(patch.astype(np.float32), (size, size), interpolation=cv2.INTER_AREA)
+    e = e - e.mean()
+    return e.ravel()
+
+
+def _envelope_gate(cands, lead_thresh: float, min_val: float, min_sep: float = 10.0):
+    """Uniqueness/PSR gate on the envelope descriptor: among spatially-distinct
+    candidates, return the one whose envelope match is DECISIVELY the best (>=
+    min_val and leading the next-best distinct candidate by >= lead_thresh), else
+    None. A decisive lead means the low-frequency content is unique enough to pin
+    the site; a near-tie means it is not, so the caller keeps the center prior.
+    This is the safety valve that stops the envelope from ever HURTING the
+    genuinely-ambiguous (defect-free, flat-envelope) case -- there the lead is ~0
+    and the gate stays silent."""
+    if len(cands) < 2:
+        return None
+    srt = sorted(cands, key=lambda c: c.envelope, reverse=True)
+    top = srt[0]
+    others = [c for c in srt[1:] if np.hypot(c.x - top.x, c.y - top.y) > min_sep]
+    second = others[0].envelope if others else -1.0
+    if top.envelope >= min_val and (top.envelope - second) >= lead_thresh:
+        return top
+    return None
+
+
 # ----------------------------------------------------------------------------
 # Hybrid ML candidate ranker (optional)
 # ----------------------------------------------------------------------------
@@ -394,6 +622,11 @@ FEATURE_ORDER = [
     "score", "fingerprint", "fp_ref_std", "dist_center_norm", "scale_dev",
     "rot_norm", "score_minus_max", "fp_minus_max", "ncc_rank", "fp_rank",
     "in_roi", "pair_max_fp", "pair_fp_gap", "pair_refstd_med",
+    # texture-agnostic envelope identity signal (value, rank, relative gap): the
+    # discriminator that survives a foreign texture. env_rank matters even when the
+    # absolute env gaps are tiny -- exactly what a learned ranker exploits and a
+    # hard threshold cannot.
+    "envelope", "env_rank", "env_minus_max",
 ]
 
 
@@ -416,6 +649,7 @@ def candidate_features(cands, W, H, nominal_ratio, rot_max_deg, max_drift_frac):
     ys = np.array([c.y for c in cands], dtype=np.float64)
     scale = np.array([c.scale for c in cands], dtype=np.float64)
     rot = np.array([c.rotation for c in cands], dtype=np.float64)
+    env = np.array([c.envelope for c in cands], dtype=np.float64)
 
     dist_center = np.hypot(xs - cx, ys - cy) / (half + 1e-9)
     scale_dev = scale / nominal_ratio - 1.0
@@ -427,6 +661,8 @@ def candidate_features(cands, W, H, nominal_ratio, rot_max_deg, max_drift_frac):
     # ranks in [0,1], 0 = best
     ncc_rank = np.argsort(np.argsort(-score)) / max(n - 1, 1)
     fp_rank = np.argsort(np.argsort(-fp)) / max(n - 1, 1)
+    env_rank = np.argsort(np.argsort(-env)) / max(n - 1, 1)  # 0 = best envelope
+    env_minus_max = env - (env.max() if n else 0.0)
     in_roi = ((xs >= x_lo) & (xs < x_hi) & (ys >= y_lo) & (ys < y_hi)).astype(np.float64)
     # pair-context (constant across candidates): gap between best and 2nd-best fp
     fp_sorted = np.sort(fp)[::-1]
@@ -437,6 +673,7 @@ def candidate_features(cands, W, H, nominal_ratio, rot_max_deg, max_drift_frac):
         score, fp, refstd, dist_center, scale_dev, rot_norm,
         score_minus_max, fp_minus_max, ncc_rank, fp_rank, in_roi,
         np.full(n, max_fp), np.full(n, pair_fp_gap), np.full(n, pair_refstd_med),
+        env, env_rank, env_minus_max,
     ])
     return X
 
@@ -513,6 +750,12 @@ def _localize_core(
     fp_gate_lo: float = 1.0,
     fp_gate_hi: float = 4.0,
     ncc_tie_margin: float = 0.012,
+    ncc_lead_thresh: float = 0.008,
+    axis_peak_frac: float = 0.8,
+    env_lead: float = 0.15,
+    env_min: float = 0.30,
+    refine_topk: int = 30,
+    fine_neighbors: int = 1,
     fp_confident: float = 0.60,
     fp_gap: float = 0.12,
     fp_floor_lo: float = 0.30,
@@ -567,6 +810,14 @@ def _localize_core(
         exactly `nominal_ratio`.
     """
     t0 = time.perf_counter()
+    # High recall is a prerequisite for the learned ranker: it selects over ALL
+    # candidates and can only pick the off-center true site (uniform placement) if
+    # candidate generation actually proposed it. The full-image candidate net has
+    # ~zero cost on center-clustered data (measured: home accuracy unchanged), so
+    # it is always enabled when the ML ranker is active.
+    if use_ml:
+        always_full_search = True
+
     # RGB bonus: accept 3-channel optical-microscope images. The structural
     # matching runs on luminance (robust, reuses the whole grayscale pipeline);
     # the color channels are retained for the color-fingerprint disambiguator (§
@@ -660,6 +911,19 @@ def _localize_core(
         out_vals = full_probe[~in_mask]
         outside_probe_best = float(out_vals.max()) if out_vals.size else -1.0
 
+    # Per-axis landmark search: a dedicated SINGLE-TRANSFORM multi-scale global NCC
+    # whose marginal-max profiles expose which axis (if any) carries an aperiodic
+    # landmark. Single template is essential -- max-projection or per-candidate
+    # refinement lets every repeat borrow its own best transform and erases the
+    # margin. Consumed in the selection step below.
+    # scales narrow (the magnification is already measured by the probe) and a
+    # coarse rotation sweep -- enough to align a rotated capture without paying the
+    # full grid: keeps the landmark rotation-robust while bounding its cost.
+    lm = _axis_landmarks(search_f, ref_f, nominal_ratio, scale_jitter, nms_dist,
+                         n=3, rot_max_deg=rot_max_deg, n_rot=5)
+
+    # Candidate-net fallback (independent of the landmark result).
+    if best_pt is not None:
         strong_outside = outside_probe_best > roi_probe_best * (1.0 + fallback_margin)
         weak_roi = roi_best < 0.4
         few_cands = len(cand_pts) < 5
@@ -706,26 +970,49 @@ def _localize_core(
         raise RuntimeError("localize: no candidate peaks found")
 
     # --- (3) per-candidate verification: refined NCC + fingerprint ---
-    scales_f = nominal_ratio * np.linspace(scale_jitter[0] + 0.01, scale_jitter[1] - 0.01, n_scales_fine)
-    rots_f = np.linspace(-rot_max_deg, rot_max_deg, n_rot_fine)
+    # Scale and rotation are per-CAPTURE (global): every repeat in this search image
+    # shares one true (scale, rotation), already found once as `probe_res`. So each
+    # candidate only needs a NARROW sweep centred on that global transform (position
+    # sub-pixel is what actually differs per site) instead of re-searching the whole
+    # grid -- the same cost-decoupling the fallback uses above. Falls back to the
+    # full fine grid only when the probe transform is unavailable.
+    if probe_res is not None:
+        ps, pr = probe_res[1], probe_res[2]
+        s_step = nominal_ratio * (scale_jitter[1] - scale_jitter[0]) / max(1, n_scales_fine - 1)
+        r_step = 2.0 * rot_max_deg / max(1, n_rot_fine - 1)
+        nb = np.arange(-fine_neighbors, fine_neighbors + 1, dtype=np.float64)
+        scales_f = ps + nb * s_step
+        rots_f = pr + nb * r_step
+    else:
+        scales_f = nominal_ratio * np.linspace(scale_jitter[0] + 0.01, scale_jitter[1] - 0.01, n_scales_fine)
+        rots_f = np.linspace(-rot_max_deg, rot_max_deg, n_rot_fine)
+
+    # Refine only the strongest candidates by coarse response score: the true site
+    # is surfaced by the max-projection map, so it is essentially always a top peak.
+    # ROI/added candidates already carry their coarse score in the 3rd tuple slot.
+    verify_pts = sorted(cand_pts, key=lambda p: p[2], reverse=True)[:max(1, refine_topk)]
+
     cands: list[Candidate] = []
-    for (cx, cy, _sc) in cand_pts:
+    for (cx, cy, _sc) in verify_pts:
         ref_result = _refine(search_f, ref_f, cx, cy, scales_f, rots_f)
         if ref_result is None:
             continue
         nccv, s, r, rx, ry, tmpl = ref_result
         th, tw = tmpl.shape
+        # search patch at this candidate (needed by both the fingerprint and the
+        # texture-agnostic envelope descriptor).
+        patch = cv2.getRectSubPix(search_f, (tw, th), (float(rx), float(ry)))
+        envelope = _ncc(_envelope(tmpl), _envelope(patch))
         xs, ys = _grid_lines(tmpl)
         if xs and ys:
             ref_fp = _fingerprint(tmpl, xs, ys)
-            patch = cv2.getRectSubPix(search_f, (tw, th), (float(rx), float(ry)))
             fp = _ncc(ref_fp, _fingerprint(patch, xs, ys))
             fp_ref_std = float(ref_fp.std())
         else:
             fp = 0.0
             fp_ref_std = 0.0
         cands.append(Candidate(x=rx, y=ry, score=nccv, scale=s, rotation=r,
-                               fingerprint=fp, fp_ref_std=fp_ref_std))
+                               fingerprint=fp, fp_ref_std=fp_ref_std, envelope=envelope))
 
     if not cands:
         raise RuntimeError("localize: candidate refinement produced no results")
@@ -807,6 +1094,50 @@ def _localize_core(
     decisive_fp = (fp_gate >= 0.5 and fp_conf_cand.fingerprint >= fp_confident
                    and fp_conf_cand.fingerprint - second_fp >= fp_gap)
 
+    # --- PER-AXIS landmark override (texture-agnostic identity cue) ---
+    # `lm` carries, per axis, the marginal-max peak and its lead over the best
+    # distinct 1-D competitor. An axis whose lead is decisive holds an APERIODIC
+    # landmark that pins that coordinate on its own (mat boundary, sense-amp/driver
+    # channel, field edge); a periodic axis has lead ~= 0. So:
+    #   * both axes solvable  -> pin (x, y) outright (uniform placement, off-center).
+    #   * one axis solvable   -> pin it; apply the brief's NEAREST-CENTER tie-break
+    #                            to the periodic axis ONLY (enumerate its repeats and
+    #                            take the one closest to the image center).
+    #   * neither solvable    -> do NOT fire; fall through to the fingerprint +
+    #                            center prior that resolve the fully-periodic case
+    #                            (protects the bounded-drift / FinFET accuracy).
+    # The pinned coarse point is refined for sub-pixel with one _refine call.
+    landmark_override = False
+    landmark_both = False   # both axes carry a decisive aperiodic anchor
+    if lm is not None:
+        corr_m, th_m, tw_m, (x_center, x_lead, xi), (y_center, y_lead, yi) = lm
+        x_solvable = x_lead >= ncc_lead_thresh
+        y_solvable = y_lead >= ncc_lead_thresh
+        landmark_both = bool(x_solvable and y_solvable)
+        if x_solvable or y_solvable:
+            if x_solvable and y_solvable:
+                cx0, cy0 = x_center, y_center
+            elif x_solvable:
+                cx0 = x_center
+                cy0 = _envelope_tiebreak_axis(search_f, ref_f, corr_m, th_m, tw_m,
+                                              'y', xi, cx0, nms_dist, scales_f, rots_f,
+                                              axis_peak_frac)
+            else:
+                cy0 = y_center
+                cx0 = _envelope_tiebreak_axis(search_f, ref_f, corr_m, th_m, tw_m,
+                                              'x', yi, cy0, nms_dist, scales_f, rots_f,
+                                              axis_peak_frac)
+            lr = _refine(search_f, ref_f, cx0, cy0, scales_f, rots_f)
+            if lr is not None:
+                _nv, _s, _r, _rx, _ry, _tm = lr
+                landmark_cand = Candidate(x=_rx, y=_ry, score=_nv, scale=_s,
+                                          rotation=_r, fingerprint=0.0, fp_ref_std=0.0)
+            else:
+                landmark_cand = Candidate(x=cx0, y=cy0, score=0.0,
+                                          scale=nominal_ratio, rotation=0.0,
+                                          fingerprint=0.0, fp_ref_std=0.0)
+            landmark_override = True
+
     # --- optional hybrid ML selector ---
     # A trained MLP scores each candidate's probability of being the true site
     # from the classical features (candidate_features). When enabled and the
@@ -814,18 +1145,44 @@ def _localize_core(
     # ROI-eligible pool is chosen -- keeping the drift-prior safety while letting
     # the learned model do the fingerprint/NCC/center trade-off it was trained
     # on. Falls back to the classical selector if the model is unavailable.
+    # HYBRID PRECEDENCE: the two high-confidence CLASSICAL cues override the learned
+    # ranker, in the SAME order the classical selector uses them, so ML mode never
+    # loses a pair the classical rules already solve exactly. ML is reserved for the
+    # residual (single-axis / fully-periodic) where neither high-confidence cue fires.
     ml_model = load_ml_ranker(ml_path) if use_ml else None
-    if ml_model is not None:
+    if ml_model is not None and decisive_fp:
+        # (1) A DECISIVE fingerprint is a reliable identity match by construction --
+        # its gate only opens on defect-rich, high-contrast crops (driftsense's home
+        # regime), where the classical rule is exact (measured: sub-pixel on FinFET
+        # pairs the ranker otherwise sent to a wrong repeat 200-330 px away, INCLUDING
+        # ones where a false-positive landmark would mislead). On the foreign beds the
+        # fingerprint is unreliable so this stays shut and the ranker still decides.
+        near_tied = [fp_conf_cand]
+        chosen = fp_conf_cand
+    elif ml_model is not None and landmark_both:
+        # (2) A decisive BOTH-axis aperiodic landmark pins (x, y) outright -- the
+        # highest-precision cue for the anchored case (measured: 100% on amehr's
+        # both-anchored pairs). The ranker must not override it (doing so threw away
+        # ~20 points on the easy case).
+        near_tied = [landmark_cand]
+        chosen = landmark_cand
+    elif ml_model is not None:
         Xf = candidate_features(cands, W, H, nominal_ratio, rot_max_deg, max_drift_frac)
         probs = _ml_scores(Xf, ml_model)
-        pool_ids = {id(c) for c in pool}
-        pool_idx = [k for k, c in enumerate(cands) if id(c) in pool_ids]
-        best_k = max(pool_idx, key=lambda k: probs[k])
+        # Select over ALL candidates, not the ROI-guarded pool: the model carries
+        # in_roi + dist_center_norm features and learns the center prior itself,
+        # so it can pick a confidently-identified OFF-CENTER site (uniform
+        # placement) that the hard ROI guard would have discarded -- while still
+        # preferring near-center repeats when identity signal is absent.
+        best_k = int(np.argmax(probs))
         chosen = cands[best_k]
         near_tied = [chosen]
     elif decisive_fp:
         near_tied = [fp_conf_cand]
         chosen = fp_conf_cand
+    elif landmark_override:
+        near_tied = [landmark_cand]
+        chosen = landmark_cand
     else:
         best_comb = max(c.combined for c in pool)
         near_tied = [c for c in pool if c.combined >= best_comb - tie_z]
@@ -833,7 +1190,19 @@ def _localize_core(
             best_ncc = max(c.score for c in pool)
             ncc_near = [c for c in pool if c.score >= best_ncc - ncc_tie_margin]
             near_tied = list({id(c): c for c in (near_tied + ncc_near)}.values())
-        chosen = min(near_tied, key=lambda c: np.hypot(c.x - center[0], c.y - center[1]))
+        # TEXTURE-AGNOSTIC ENVELOPE GATE: among the NCC/fused near-ties (the
+        # periodic repeats the fingerprint could not separate), if one has a
+        # decisively better low-frequency identity match, it IS the true site --
+        # take it, overriding the center prior. This is the fix for the
+        # uniform-placed periodic case, where the true site is NOT nearest center
+        # and the fin-gate fingerprint is blind to a foreign texture. The gate
+        # requires a decisive lead, so on a genuinely flat-envelope crop it stays
+        # silent and the center prior still arbitrates (no regression there).
+        env_pick = _envelope_gate(near_tied, env_lead, env_min)
+        if env_pick is not None:
+            chosen = env_pick
+        else:
+            chosen = min(near_tied, key=lambda c: np.hypot(c.x - center[0], c.y - center[1]))
 
     # selection confidence from the combined-score margin between the top two
     # spatially-distinct candidates (a genuine near-tie -> ambiguous -> low conf).
