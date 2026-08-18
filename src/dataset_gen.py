@@ -443,8 +443,9 @@ def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "i
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--style", choices=["finfet", "dram"], default="finfet",
-                    help="architecture style to generate (default: finfet)")
+    ap.add_argument("--style", type=str.lower, choices=["finfet", "dram"], default="finfet",
+                    help="architecture style to generate: finfet or dram "
+                         "(case-insensitive; default: finfet)")
     ap.add_argument("--n", type=int, default=30, help="number of pairs to generate")
     ap.add_argument("--out", type=str, default="data", help="output directory")
     ap.add_argument("--seed", type=int, default=0, help="base random seed")
