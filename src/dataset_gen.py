@@ -427,9 +427,45 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
     return ref_u8, search_u8, meta
 
 
+def _preview_figure(ref, search, gtx, gty, ratio, path, title):
+    """reference | search (green box at ground truth) | zoom @ GT with a decimated
+    reference inset -- the dataset preview used in a walkthrough (marks TRUTH,
+    not a prediction; this is generator-side, before any localisation)."""
+    def bgr(g):
+        g = g if g.ndim == 2 else cv2.cvtColor(g, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
+    H = 340
+    ref_p = cv2.resize(bgr(ref), (H, H))
+    s_b = bgr(search); h, w = s_b.shape[:2]
+    box = max(6, int(round(0.5 * 1000.0 / ratio)))
+    s_box = s_b.copy()
+    cv2.rectangle(s_box, (int(gtx - box), int(gty - box)), (int(gtx + box), int(gty + box)), (60, 220, 60), 2)
+    s_p = cv2.resize(s_box, (H, H))
+    z = 140
+    x0 = int(np.clip(gtx - z, 0, max(0, w - 2 * z))); y0 = int(np.clip(gty - z, 0, max(0, h - 2 * z)))
+    zoom = cv2.resize(s_b[y0:y0 + 2 * z, x0:x0 + 2 * z], (H, H), interpolation=cv2.INTER_NEAREST)
+    cv2.drawMarker(zoom, (int((gtx - x0) * H / (2 * z)), int((gty - y0) * H / (2 * z))),
+                   (60, 220, 60), cv2.MARKER_CROSS, 24, 2)
+    ins = cv2.resize(bgr(ref), (104, 104), interpolation=cv2.INTER_AREA)
+    zoom[6:110, H - 110:H - 6] = ins
+    cv2.rectangle(zoom, (H - 110, 6), (H - 6, 110), (230, 150, 40), 2)
+    gap = np.full((H, 12, 3), 255, np.uint8)
+    strip = np.hstack([ref_p, gap, s_p, gap, zoom])
+    header = np.full((30, strip.shape[1], 3), 255, np.uint8)
+    for label, cx in [("REFERENCE 100x", H // 2), ("SEARCH 10x (green=GT)", H + 12 + H // 2),
+                      ("ZOOM @ GT + ref inset", 2 * (H + 12) + H // 2)]:
+        (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.putText(header, label, (max(2, cx - tw // 2), 21), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (20, 20, 20), 1, cv2.LINE_AA)
+    out = np.vstack([header, strip])
+    cv2.putText(out, title, (6, out.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (140, 60, 20), 1, cv2.LINE_AA)
+    cv2.imwrite(path, out)
+
+
 def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "int | None" = None,
                      style: str = "finfet", mag_jitter: bool = False, rgb: bool = False,
-                     superstructure: bool = False, noise_level: str = "medium"):
+                     superstructure: bool = False, noise_level: str = "medium",
+                     preview: bool = False):
     # Number of deliberately-hard "forced periodic" (near-defect-free) pairs scales
     # with the set size: none for a tiny quick-start set (so the first pair a
     # reviewer runs is a normal, solvable one), up to 3 for a full >=30-pair set
@@ -437,6 +473,13 @@ def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "i
     if n_forced_periodic is None:
         n_forced_periodic = min(3, n // 10)
     os.makedirs(out_dir, exist_ok=True)
+    prev_dir = os.path.join(out_dir, "previews")
+    if preview:
+        os.makedirs(prev_dir, exist_ok=True)
+        prev_rows = []
+        print(f"{'pair':>9} {'style':>6} {'theta':>7} {'scale':>6} {'GT x':>7} {'GT y':>7} "
+              f"{'drift':>6} {'blur':>5} {'mag':>5} {'sec':>5}")
+
     all_meta = []
     for i in range(n):
         forced = i < n_forced_periodic
@@ -446,13 +489,24 @@ def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "i
         # forced-periodic pairs are kept pure-lattice (no superstructure) so the
         # mandatory "genuinely-hard periodic region" honest-failure case survives
         # even when the rest of the set carries the disambiguating mat structure.
+        t0 = time.time()
         ref_img, search_img, meta = generate_pair(i, seed0 + i, forced_periodic=forced,
                                                   style=pair_style, mag_jitter=mag_jitter, rgb=rgb,
                                                   superstructure=superstructure and not forced,
                                                   noise_level=noise_level)
+        sec = time.time() - t0
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_ref.png"), ref_img)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_search.png"), search_img)
         all_meta.append(asdict(meta))
+        if preview:
+            drift = float(np.hypot(meta.gt_x - 500.0, meta.gt_y - 500.0))
+            print(f"pair_{i:04d} {pair_style:>6} {meta.rotation_deg:>+7.2f} {meta.scale:>6.3f} "
+                  f"{meta.gt_x:>7.1f} {meta.gt_y:>7.1f} {drift:>6.0f} {meta.search_blur_sigma:>5.2f} "
+                  f"{meta.magnification_ratio:>5.2f} {sec:>5.2f}")
+            _preview_figure(ref_img, search_img, meta.gt_x, meta.gt_y, meta.magnification_ratio,
+                            os.path.join(prev_dir, f"pair_{i:03d}.png"),
+                            f"pair_{i:03d} | {pair_style} noise={noise_level} theta={meta.rotation_deg:.2f}deg "
+                            f"scale={meta.scale:.3f} drift={drift:.0f}px GT=({meta.gt_x:.1f}, {meta.gt_y:.1f})")
     with open(os.path.join(out_dir, "ground_truth.json"), "w") as f:
         json.dump(all_meta, f, indent=2)
     return all_meta
@@ -471,6 +525,9 @@ if __name__ == "__main__":
                     default="medium",
                     help="acquisition difficulty of the wide-search capture: low "
                          "(clean), medium (default), or high (heavy blur + shot/read noise)")
+    ap.add_argument("--preview", action="store_true",
+                    help="print a per-pair table (theta/scale/GT/drift/time) and save a "
+                         "reference|search|zoom preview figure per pair to OUT/previews/")
     ap.add_argument("--mag-jitter", action="store_true",
                     help="vary the true magnification per pair (~9x-11x) instead of a "
                          "fixed 10x -- a harder, more realistic set for scale-robustness")
@@ -486,7 +543,8 @@ if __name__ == "__main__":
     t0 = time.time()
     meta = generate_dataset(args.n, args.out, seed0=args.seed, style=args.style,
                             mag_jitter=args.mag_jitter, rgb=args.rgb,
-                            superstructure=args.superstructure, noise_level=args.noise_level)
+                            superstructure=args.superstructure, noise_level=args.noise_level,
+                            preview=args.preview)
     dt = time.time() - t0
     label = "finfet+dram" if args.style == "both" else args.style
     print(f"Generated {len(meta)} {label} pairs in {dt:.2f}s -> {args.out}/")
