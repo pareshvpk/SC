@@ -1,4 +1,4 @@
-# Drift-Sense localizer — engineering report (FinFET)
+# Drift-Sense localizer — engineering report (FinFET + DRAM)
 
 ## 0. What this dataset is, and why it is deliberately hard
 
@@ -29,11 +29,12 @@ lands deep inside a mat interior is still locally periodic and genuinely hard (a
 honest-failure case). `forced_periodic` pairs are kept pure-lattice so the mandatory
 "highly periodic, genuinely difficult" region is always present.
 
-**Note on the numbers below.** The §4 result and §5 failure case are measured on
-this realistic superstructure `data/`. The robustness studies in §8–§11 (fused-consensus
-selection, off-center, scale, RGB) were characterized on the pure-lattice baseline
-(96.7 % within 1 µm); their findings are *architecture properties* — relative
-effects that transfer — not tied to the exact base set.
+**Note on the numbers below.** The §4 headline is measured on the 200-pair
+benchmark (FinFET + DRAM, fixed and variable magnification) produced by
+`tools/benchmark_report.py`; the §5 failure taxonomy is drawn from the same set.
+The robustness studies in §8–§11 (fused-consensus selection, off-center, scale,
+RGB) were characterized on earlier focused sets; their findings are *architecture
+properties* — relative effects that transfer — not tied to the exact base set.
 
 ## 1. Why plain cross-correlation fails on a periodic lattice
 
@@ -111,20 +112,36 @@ A bounded-drift ROI is searched first (a prior, not a hard bound); an out-of-ROI
 candidate must beat the best in-ROI candidate by a decisive margin to compete, and
 a comparative full-image fallback covers sites outside the drift envelope.
 
-## 4. Result (30-pair self-eval, `python eval.py --data data`)
+## 4. Result (200-pair benchmark, `python tools/benchmark_report.py --out data_bench`)
 
-| median px | mean px | max px | <1 px | <10 px | <100 px (1 µm) | >100 px # | sec/pair |
-|---|---|---|---|---|---|---|---|
-| **0.3** | **18.7** | 167.3 | **80.0 %** | **83.3 %** | **90.0 %** | **3** | **1.7** |
+The headline set is **200 pairs** spanning both **FinFET and DRAM** structures,
+**fixed 10× and variable 9–11×** magnification, each an independent noise
+realisation with its own random rotation and a random ground-truth position.
 
-On the deliberately-hard superstructure `data/`: median **0.3 px**, **90 % within
-1 µm**, sub-pixel on the great majority of pairs. The 3 residual misses are
-genuinely-hard by construction (§5), not defects of the method. Runtime is
-machine-dependent (~1.7 s/pair here).
+| median px | mean px | ≤1 px (sub-pixel) | ≤5 px (50 nm) | ≤30 px (300 nm) | mean ms/pair | under 200 ms |
+|---|---|---|---|---|---|---|
+| **0.05** | 29.9 | **90.5 %** | **92.0 %** | **92.0 %** | **118** | **100 %** |
 
-## 5. Honest failure cases (3/30)
+The error distribution is **bimodal by design**: a revisit is either pinned
+sub-pixel (90.5 % of pairs land inside 1 px, median 0.05 px) or it is a
+defect-free forced-periodic crop with no aperiodic content to disambiguate,
+flagged **low-confidence** and resolved by the spec's nearest-centre rule (§5).
+The mean is dragged only by that flagged ~8 % tail. By split (50 pairs each,
+within 300 nm): **DRAM 100 % / 100 %** (fixed / variable-mag), **FinFET 90 % /
+78 %** — fine-pitch fins under simultaneous scale jitter are the honest hard case.
 
-All three misses are genuinely-hard by construction, not defects of the method:
+**Latency.** Inference is **classical, single-threaded CPU, `cv2 + numpy` only**,
+and runs in **mean 118 ms/pair (median 117, max 164), 100 % under a 200 ms
+budget** — a 6–7× speed-up over the earlier build, achieved with no accuracy loss
+by (i) vectorising the crossing-defect fingerprint into a single box filter,
+(ii) computing every fallback/rescue response map on a 2× downsample (peaks are
+re-refined at full resolution), and (iii) skipping a redundant full-image sweep
+when the rescue path has already searched the whole frame.
+
+## 5. Honest failure cases (the flagged tail)
+
+The residual misses (~8 % of the 200-pair set) are genuinely-hard by construction,
+not defects of the method — and they fall into two categories, both low-confidence-flagged:
 
 - **Two `forced_periodic` crops** (kept pure-lattice): the crop sits deep in a
   near-defect-free periodic region, so the fingerprint has no signal (`fp_gate` → 0)
@@ -289,10 +306,11 @@ images. Both ends support it:
 
 ## Files
 
-- `localize.py` — the localizer (public API `localize(ref, search) -> (x, y, info)`).
-- `eval.py` — self-eval harness (per-pair error, timing, % within tolerance).
-- `dataset_gen.py` — FinFET / DRAM dataset generator.
-- `make_offcenter_sets.py` — off-center (inner/corner) drift-robustness test sets.
+- `src/localize.py` — the localizer (public API `localize(ref, search) -> (x, y, info)`).
+- `src/eval.py` — self-eval harness (per-pair error, timing, % within tolerance).
+- `src/dataset_gen.py` — FinFET / DRAM dataset generator.
+- `tools/benchmark_report.py` — reproduces the §4 200-pair result and the README charts.
+- `tools/make_offcenter_sets.py` — off-center (inner/corner) drift-robustness test sets.
 - `make_blind_set.py` — blind positional test set (GT only, zones hidden).
 - `citations.md` — literature backing every noise/blur/structural choice.
 - `requirements.txt` — inference dependencies (numpy / OpenCV / SciPy).

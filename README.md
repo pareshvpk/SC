@@ -315,7 +315,6 @@ Maps directly to the required deliverables; every file's purpose, so nothing nee
 | `citations.md` | Every design choice mapped to the public source that justifies it. |
 | `tools/` | `predict.py` (annotated overlay on your own images), `selftest.py` (quick unseen-pair check), off-center / blind test-set makers. |
 | `docs/REPORT.md` | Full write-up: pipeline, ablations, failure taxonomy, robustness studies. |
-| `docs/ALGORITHM_SUMMARY.md` | One-page algorithm overview. |
 | `docs/images/` | Result figures and the architecture diagram. |
 | `data/` | Ready-made 30-pair self-eval set (+ `ground_truth.json`). |
 | `LICENSE` | MIT. |
