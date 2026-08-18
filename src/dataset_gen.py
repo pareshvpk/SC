@@ -183,6 +183,17 @@ def add_sensor_noise(img: np.ndarray, rng: np.random.Generator,
     return np.clip(noisy, 0.0, 1.0).astype(np.float32)
 
 
+# Acquisition-difficulty presets for the wide-search capture. Multipliers on the
+# search-image blur, photon dose (shot_scale; lower dose => more shot noise) and
+# read noise -- so "high" is a genuinely harder, noisier revisit. "medium" is the
+# canonical setting (all multipliers 1.0).
+NOISE_LEVELS = {
+    "low":    dict(blur=0.65, dose=2.0,  read=0.5),
+    "medium": dict(blur=1.0,  dose=1.0,  read=1.0),
+    "high":   dict(blur=1.5,  dose=0.45, read=2.2),
+}
+
+
 # Thin-film-interference tint (BGR): shadows read cool/bluish, highlights warm/gold
 # -- the characteristic optical-microscope colour cast. Applied as a MULTIPLIER on
 # luminance so a grayscale (luminance) conversion recovers the structure almost
@@ -258,7 +269,7 @@ class PairMeta:
 def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
                   drift_nm: "tuple | None" = None, style: str = "finfet",
                   mag_jitter: bool = False, rgb: bool = False,
-                  superstructure: bool = False):
+                  superstructure: bool = False, noise_level: str = "medium"):
     """Generate one (reference, search, ground_truth) sample.
 
     forced_periodic: if True, the reference crop is deliberately placed away
@@ -353,9 +364,10 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
     gt_x = cx / SEARCH_NM_PER_PX
     gt_y = cy / SEARCH_NM_PER_PX
 
-    # --- independent per-capture blur ---
+    # --- independent per-capture blur (search blur scaled by the noise level) ---
+    nl = NOISE_LEVELS.get(noise_level, NOISE_LEVELS["medium"])
     ref_blur_sigma = rng.uniform(0.25, 0.45)
-    search_blur_sigma = rng.uniform(0.4, 0.7)  # search is noisier/blurrier
+    search_blur_sigma = rng.uniform(0.4, 0.7) * nl["blur"]  # search is noisier/blurrier
     ref_img = cv2.GaussianBlur(ref_base, (0, 0), ref_blur_sigma)
     search_img = cv2.GaussianBlur(search_base, (0, 0), search_blur_sigma)
 
@@ -399,7 +411,8 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
         search_u8 = (search_c * 255).astype(np.uint8)
     else:
         ref_img = add_sensor_noise(ref_img, ref_rng, shot_scale=6.0, read_std=0.004)
-        search_img = add_sensor_noise(search_img, search_rng, shot_scale=3.0, read_std=0.008)
+        search_img = add_sensor_noise(search_img, search_rng,
+                                      shot_scale=3.0 * nl["dose"], read_std=0.008 * nl["read"])
         ref_u8 = (ref_img * 255).astype(np.uint8)
         search_u8 = (search_img * 255).astype(np.uint8)
 
@@ -416,7 +429,7 @@ def generate_pair(pair_id: int, seed: int, forced_periodic: bool = False,
 
 def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "int | None" = None,
                      style: str = "finfet", mag_jitter: bool = False, rgb: bool = False,
-                     superstructure: bool = False):
+                     superstructure: bool = False, noise_level: str = "medium"):
     # Number of deliberately-hard "forced periodic" (near-defect-free) pairs scales
     # with the set size: none for a tiny quick-start set (so the first pair a
     # reviewer runs is a normal, solvable one), up to 3 for a full >=30-pair set
@@ -435,7 +448,8 @@ def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "i
         # even when the rest of the set carries the disambiguating mat structure.
         ref_img, search_img, meta = generate_pair(i, seed0 + i, forced_periodic=forced,
                                                   style=pair_style, mag_jitter=mag_jitter, rgb=rgb,
-                                                  superstructure=superstructure and not forced)
+                                                  superstructure=superstructure and not forced,
+                                                  noise_level=noise_level)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_ref.png"), ref_img)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_search.png"), search_img)
         all_meta.append(asdict(meta))
@@ -453,6 +467,10 @@ if __name__ == "__main__":
     ap.add_argument("--n", type=int, default=30, help="number of pairs to generate")
     ap.add_argument("--out", type=str, default="data", help="output directory")
     ap.add_argument("--seed", type=int, default=0, help="base random seed")
+    ap.add_argument("--noise-level", type=str.lower, choices=["low", "medium", "high"],
+                    default="medium",
+                    help="acquisition difficulty of the wide-search capture: low "
+                         "(clean), medium (default), or high (heavy blur + shot/read noise)")
     ap.add_argument("--mag-jitter", action="store_true",
                     help="vary the true magnification per pair (~9x-11x) instead of a "
                          "fixed 10x -- a harder, more realistic set for scale-robustness")
@@ -468,7 +486,7 @@ if __name__ == "__main__":
     t0 = time.time()
     meta = generate_dataset(args.n, args.out, seed0=args.seed, style=args.style,
                             mag_jitter=args.mag_jitter, rgb=args.rgb,
-                            superstructure=args.superstructure)
+                            superstructure=args.superstructure, noise_level=args.noise_level)
     dt = time.time() - t0
     label = "finfet+dram" if args.style == "both" else args.style
     print(f"Generated {len(meta)} {label} pairs in {dt:.2f}s -> {args.out}/")
