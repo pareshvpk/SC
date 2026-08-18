@@ -67,6 +67,12 @@ python src/eval.py --data data/holdout --tolerance_px 30
 
 **CPU only. No GPU, no network access at run time, no model weights to download.** No manual edits required.
 
+> **Bringing your own data?** Step 1 only exists to hand you a labelled sample to try. `localize.py` is
+> **generator-agnostic** — it takes *any* reference + search image pair, whether it comes from your own
+> SEM/optical captures or your own synthetic generator. Just point it at your two files:
+> `python src/localize.py YOUR_reference.png YOUR_search.png`. Full walk-through in
+> [🧪 Test it on your own machine](#-test-it-on-your-own-machine).
+
 ---
 
 ## 🎛️ The two scripts that matter
@@ -129,9 +135,11 @@ pip install -r requirements.txt
 python src/localize.py /path/to/your_reference.png /path/to/your_search.png
 #  ->  prints ONE line:   x, y
 ```
+- **What the two images are:** `reference` = a **high-magnification close-up** of the target site; `search` = a **wider, lower-magnification** view that contains that site somewhere. The image *source doesn't matter* — real captures or any synthetic generator both work.
+- **Magnification:** nominal ratio is **10×** and is measured automatically over ~9–11×. If your search is zoomed by a different factor, pass it explicitly: `--ratio R` (e.g. `--ratio 8`). No other tuning is ever needed.
+- **Formats:** grayscale or RGB, `uint8`/`uint16`, any resolution — read automatically; RGB is reduced to luminance.
 - `x, y` is the predicted centre of the reference inside the search image, in search-image pixels (origin top-left, x→right, y→down).
-- Only that one line goes to **stdout**; add `--verbose` for match score / confidence on stderr.
-- Accepts any size / bit depth / channel count, measures the magnification itself, and never raises.
+- Only that one line goes to **stdout**; add `--verbose` for match score / confidence on stderr. Never raises — a hard case still prints a coordinate.
 
 **2 · Batch over a folder of pairs** (optional)
 ```bash
@@ -225,29 +233,9 @@ an aperiodic axis landmark) still short-circuit ahead of the consensus when they
 
 ### Pipeline
 
-```
-reference (1000x1000 @1nm)                   search (1000x1000 @10nm)
-        |                                            |
-        |                                    adaptive denoise + local
-        |                                    contrast normalisation
-        |                                            |
-        +---- magnification sweep  ->  scale R  <----+
-        |
-        +---- NCC scale/rotation sweep, full-image response map
-              + off-center candidate harvest (single-template probe)
-                            |
-                      top-K peaks (NMS keeps repeats distinct)
-                            |
-        +---- per-candidate verify: refined NCC + crossing-defect
-              fingerprint + low-freq envelope + periodic-residual
-                            |
-              FUSED-CONSENSUS selection  (z(NCC)+z(residual)+z(envelope))
-              -> decisive winner, else nearest-centre tie-break
-                            |
-                  sub-pixel parabolic fit
-                            |
-                    final (x, y) + confidence
-```
+<div align="center">
+<img src="docs/images/pipeline.png" width="560" alt="Drift-Sense localisation pipeline: reference + search → normalise & measure magnification → NCC scale/rotation sweep with off-center candidate harvest → top-K peaks (NMS) → per-candidate verification (NCC, fingerprint, envelope, periodic-residual) → fused-consensus selection → sub-pixel fit → (x, y) + confidence"/>
+</div>
 
 **Periodic-residual re-ranking.** Raw ZNCC alone is dominated by the wallpaper energy every repeat shares,
 so noise can make a wrong repeat outscore the true position — the dominant DRAM failure mode. The lattice
@@ -273,18 +261,14 @@ All numbers are reproducible with the commands in [Quick start](#-quick-start); 
 
 **Headline** — 30-pair self-eval, realistic subarray-mat superstructure (`python src/eval.py --data data`):
 
-| median | within 100 nm (10 px) | within **300 nm** (30 px) | within 500 nm (50 px) | within 1 µm (100 px) | honest failures (>1 µm) | ~s/pair |
-|---|---|---|---|---|---|---|
-| **0.2 px** | **80.0 %** | **83.3 %** | 83.3 % | **90.0 %** | **3 / 30** | ~1.2 |
-
 <div align="center">
 <img src="docs/images/passrate.png" width="620" alt="Pass rate by error tolerance on the 30-pair self-eval set: 80% within 100nm, 83.3% within the 300nm success footprint, 90% within 1µm"/>
 </div>
 
-Sub-pixel on the great majority of pairs (24/30 land inside **1 px**). The 3 residual misses are
-honest-failure cases by construction — defect-free forced-periodic crops with no aperiodic content to
-disambiguate — correctly flagged low-confidence rather than delivered silently. Runtime is
-machine-dependent (single-threaded CPU).
+**Median 0.2 px · 90 % within 1 µm · 3 / 30 honest failures · ~1.2 s/pair** (single-threaded CPU).
+24 of 30 pairs land inside **1 px**. The 3 residual misses are honest-failure cases by construction —
+defect-free forced-periodic crops with no aperiodic content to disambiguate — correctly flagged
+low-confidence rather than delivered silently.
 
 **Scale robustness** — the localiser *measures* magnification rather than assuming 10×:
 
