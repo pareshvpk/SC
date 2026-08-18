@@ -142,6 +142,27 @@ python tools/selftest.py --n 20
 
 ---
 
+## 🎬 Demo & judge smoke test
+
+**One-command pipeline check** — generates a small set, localises every pair through the **real `localize.py` CLI** (subprocess, exactly the grader's call), prints per-pair results, and asserts PASS/FAIL (exit 0/1):
+```bash
+python tools/smoke_test.py
+```
+
+**Preview the data** — prints a per-pair table (`theta / scale / GT / drift / time`) and saves a `reference | search | zoom` figure per pair to `demo/previews/`:
+```bash
+python src/dataset_gen.py --style both --n 5 --preview --seed 42 --out demo
+```
+
+**Full grouped report** — per-image table + a structure×noise breakdown (`dram/finfet/mixed × low/medium/high`, columns `<=5px`, rate, `<=10px`, mean, median, p95, ms) with an `ALL pairs` row, plus located figures in `demo_out/figures/`:
+```bash
+python tools/demo_report.py --out demo_out --n 10 --seed 7
+```
+
+`--noise-level {low,medium,high}` on the generator sets acquisition difficulty (search-image blur + shot/read noise).
+
+---
+
 ## 📐 Geometry contract
 
 ```
