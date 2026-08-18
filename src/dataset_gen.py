@@ -427,11 +427,14 @@ def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "i
     all_meta = []
     for i in range(n):
         forced = i < n_forced_periodic
+        # style="both" produces a single mixed set, alternating FinFET/DRAM per pair
+        # so one command exercises both architectures.
+        pair_style = ("finfet" if i % 2 == 0 else "dram") if style == "both" else style
         # forced-periodic pairs are kept pure-lattice (no superstructure) so the
         # mandatory "genuinely-hard periodic region" honest-failure case survives
         # even when the rest of the set carries the disambiguating mat structure.
         ref_img, search_img, meta = generate_pair(i, seed0 + i, forced_periodic=forced,
-                                                  style=style, mag_jitter=mag_jitter, rgb=rgb,
+                                                  style=pair_style, mag_jitter=mag_jitter, rgb=rgb,
                                                   superstructure=superstructure and not forced)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_ref.png"), ref_img)
         cv2.imwrite(os.path.join(out_dir, f"pair_{i:03d}_search.png"), search_img)
@@ -443,9 +446,10 @@ def generate_dataset(n: int, out_dir: str, seed0: int = 0, n_forced_periodic: "i
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--style", type=str.lower, choices=["finfet", "dram"], default="finfet",
-                    help="architecture style to generate: finfet or dram "
-                         "(case-insensitive; default: finfet)")
+    ap.add_argument("--style", type=str.lower, choices=["finfet", "dram", "both"], default="finfet",
+                    help="architecture style to generate: finfet, dram, or both "
+                         "(both = one mixed set alternating FinFET/DRAM per pair; "
+                         "case-insensitive; default: finfet)")
     ap.add_argument("--n", type=int, default=30, help="number of pairs to generate")
     ap.add_argument("--out", type=str, default="data", help="output directory")
     ap.add_argument("--seed", type=int, default=0, help="base random seed")
@@ -466,4 +470,5 @@ if __name__ == "__main__":
                             mag_jitter=args.mag_jitter, rgb=args.rgb,
                             superstructure=args.superstructure)
     dt = time.time() - t0
-    print(f"Generated {len(meta)} {args.style} pairs in {dt:.2f}s -> {args.out}/")
+    label = "finfet+dram" if args.style == "both" else args.style
+    print(f"Generated {len(meta)} {label} pairs in {dt:.2f}s -> {args.out}/")

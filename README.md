@@ -52,14 +52,12 @@ pip install -r requirements.txt
 ```
 
 ```bash
-python src/dataset_gen.py --style finfet --n 30 --out data/holdout_finfet --seed 7
-python src/dataset_gen.py --style dram   --n 30 --out data/holdout_dram   --seed 7
-python src/localize.py data/holdout_finfet/pair_000_ref.png data/holdout_finfet/pair_000_search.png
-python src/eval.py --data data/holdout_finfet --tolerance_px 30
-python src/eval.py --data data/holdout_dram   --tolerance_px 30
+python src/dataset_gen.py --style both --n 30 --out data/holdout --seed 7
+python src/localize.py data/holdout/pair_000_ref.png data/holdout/pair_000_search.png
+python src/eval.py --data data/holdout --tolerance_px 30
 ```
 
-`--style` selects the structure (`finfet` or `dram`) and `--n` sets how many pairs to generate (e.g. `--n 10` makes 10).
+`--style` is `finfet`, `dram`, or `both` (one mixed set), and `--n` sets how many pairs to generate (e.g. `--n 10` makes 10).
 
 **CPU only. No GPU, no network access at run time, no model weights to download.**
 
@@ -88,7 +86,7 @@ Writes **exactly one line** to stdout:
 ### `src/dataset_gen.py` — the dataset generator
 
 ```bash
-python src/dataset_gen.py --style {finfet,dram} \
+python src/dataset_gen.py --style {finfet,dram,both} \
                           --n N \
                           --out DIR \
                           [--seed S] [--mag-jitter] [--superstructure] [--rgb]
@@ -100,6 +98,7 @@ traces back to the exact conditions that produced it. `--style` is case-insensit
 
 | flag | effect |
 |---|---|
+| `--style` | `finfet`, `dram`, or `both` — `both` makes one mixed set, alternating FinFET/DRAM per pair |
 | `--mag-jitter` | vary the true magnification per pair (~9×–11×) instead of a fixed 10× — a harder scale-robustness set |
 | `--superstructure` | add the realistic subarray-**mat** superstructure (sense-amp + driver channels) — looks like a real wafer array |
 | `--rgb` | 3-channel RGB optical-microscope-style pairs (thin-film-interference colour) instead of grayscale SEM (bonus track) |
@@ -133,7 +132,7 @@ done
 ```
 
 ```bash
-python src/dataset_gen.py --style dram --n 30 --out mytest --seed 1
+python src/dataset_gen.py --style both --n 30 --out mytest --seed 1
 python src/eval.py --data mytest --tolerance_px 30
 ```
 
