@@ -52,10 +52,14 @@ pip install -r requirements.txt
 ```
 
 ```bash
-python src/dataset_gen.py --style finfet --n 30 --out data/holdout --seed 7
-python src/localize.py data/holdout/pair_000_ref.png data/holdout/pair_000_search.png
-python src/eval.py --data data/holdout --tolerance_px 30
+python src/dataset_gen.py --style finfet --n 30 --out data/holdout_finfet --seed 7
+python src/dataset_gen.py --style dram   --n 30 --out data/holdout_dram   --seed 7
+python src/localize.py data/holdout_finfet/pair_000_ref.png data/holdout_finfet/pair_000_search.png
+python src/eval.py --data data/holdout_finfet --tolerance_px 30
+python src/eval.py --data data/holdout_dram   --tolerance_px 30
 ```
+
+`--style` selects the structure (`finfet` or `dram`) and `--n` sets how many pairs to generate (e.g. `--n 10` makes 10).
 
 **CPU only. No GPU, no network access at run time, no model weights to download.**
 
