@@ -68,8 +68,9 @@ def agg(rows):
     e = np.array([r["error_px"] for r in rows]); t = np.array([r["time_ms"] for r in rows])
     return dict(n=len(rows),
                 le5=100.0 * float((e <= 5).mean()), le10=100.0 * float((e <= 10).mean()),
+                n_le5=int((e <= 5).sum()), n_le10=int((e <= 10).sum()),
                 mean_px=float(e.mean()), median_px=float(np.median(e)),
-                mean_ms=float(t.mean()))
+                p95_px=float(np.percentile(e, 95)), mean_ms=float(t.mean()))
 
 
 def triptych(ref, search, x, y, gt_x, gt_y, path, title):
@@ -145,16 +146,20 @@ def main():
 
     # ---------- 2. category table ----------
     print(f"\n=== CATEGORY SUMMARY  ({a.n} pairs each) ===")
-    print(f"{'category':>14} {'n':>3} {'<=5px':>7} {'<=10px':>7} {'mean_px':>8} {'median_px':>9} {'mean_ms':>8}")
+    hdr = (f"{'category':>14} {'<=5px':>7} {'rate':>5} {'<=10px':>7} {'mean_px':>8} "
+           f"{'median':>7} {'p95':>7} {'mean_ms':>8}")
+    print(hdr)
     for name, s in cat_summ:
-        print(f"{name:>14} {s['n']:>3} {s['le5']:>6.0f}% {s['le10']:>6.0f}% "
-              f"{s['mean_px']:>8.2f} {s['median_px']:>9.2f} {s['mean_ms']:>8.0f}")
+        print(f"{name:>14} {s['n_le5']:>3}/{s['n']:<3} {s['le5']:>4.0f}% "
+              f"{s['n_le10']:>3}/{s['n']:<3} {s['mean_px']:>8.2f} "
+              f"{s['median_px']:>7.2f} {s['p95_px']:>7.2f} {s['mean_ms']:>8.0f}")
 
     # ---------- 3. overall row ----------
     o = agg(all_rows)
-    print("-" * 66)
-    print(f"{'OVERALL':>14} {o['n']:>3} {o['le5']:>6.0f}% {o['le10']:>6.0f}% "
-          f"{o['mean_px']:>8.2f} {o['median_px']:>9.2f} {o['mean_ms']:>8.0f}")
+    print("-" * len(hdr))
+    print(f"{'ALL pairs':>14} {o['n_le5']:>3}/{o['n']:<3} {o['le5']:>4.0f}% "
+          f"{o['n_le10']:>3}/{o['n']:<3} {o['mean_px']:>8.2f} "
+          f"{o['median_px']:>7.2f} {o['p95_px']:>7.2f} {o['mean_ms']:>8.0f}")
     print(f"\nACCURACY: {o['le5']:.0f}% within 5 px ({o['le5']:.0f}% within 50 nm) | "
           f"median {o['median_px']:.2f} px | LATENCY: mean {o['mean_ms']:.0f} ms/pair")
 
