@@ -3,7 +3,6 @@
     python predict.py --ref myref.png --search mysearch.png
     python predict.py --ref r.png --search s.png --out result.png   # save overlay
     python predict.py --ref r.png --search s.png --gt 512 488        # if you know GT
-    python predict.py --ref r.png --search s.png --use_ml            # use the ML ranker
 
 Prints the predicted center (x, y) in SEARCH-image pixels and, unless --no_overlay,
 saves an annotated copy of the search image with a box + crosshair at the match so
@@ -32,7 +31,6 @@ def main():
     ap.add_argument("--search", required=True)
     ap.add_argument("--ratio", type=float, default=10.0, help="magnification ratio (search low-mag : ref high-mag)")
     ap.add_argument("--gt", type=float, nargs=2, metavar=("X", "Y"), help="known ground-truth center, if any")
-    ap.add_argument("--use_ml", action="store_true", help="use the optional hybrid ML ranker")
     ap.add_argument("--out", default="prediction_overlay.png")
     ap.add_argument("--no_overlay", action="store_true")
     args = ap.parse_args()
@@ -45,7 +43,7 @@ def main():
         raise SystemExit(f"Could not read search image: {args.search}")
     print(f"reference: {ref.shape[1]}x{ref.shape[0]}   search: {search.shape[1]}x{search.shape[0]}   ratio: {args.ratio}x")
 
-    x, y, info = localize(ref, search, nominal_ratio=args.ratio, use_ml=args.use_ml)
+    x, y, info = localize(ref, search, nominal_ratio=args.ratio)
 
     print(f"\n>>> Predicted center (search px):  x = {x:.2f}   y = {y:.2f}")
     print(f"    match NCC = {info.chosen.score:.3f}   fingerprint = {info.chosen.fingerprint:.3f}   "

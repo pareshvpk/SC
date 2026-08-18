@@ -29,12 +29,14 @@ periodic semiconductor die — even when the layout is a wall of near-identical 
 
 Given a **reference** (100× close-up) and a **search** (10× wide view) of the same site, return the
 reference's center `(x, y)` in the search image. Among many identical periodic repeats, the correct
-one is disambiguated by a per-site **crossing-defect fingerprint** and a bounded-drift center prior.
+one is disambiguated by a **multi-signal consensus** (correlation + periodic-residual + envelope) and
+a bounded-drift center prior.
 
-**Approach** — a classical *(non-trained)* CV pipeline: magnification measurement → max-projection
-template matching → broad candidate net → per-candidate verification (refined NCC + fingerprint) →
-reliability-aware selection. An **optional** small trained MLP ranker is included, but the classical
-algorithm is the scored solution.
+**Approach** — a fully classical, **non-trained** advanced-CV pipeline: magnification measurement →
+max-projection template matching → broad candidate net (including off-center peaks) → per-candidate
+verification (refined NCC + crossing-defect fingerprint + low-frequency envelope + **periodic-residual**
+match) → **fused-consensus** selection. No machine learning: no model, no training data, deterministic
+and fully auditable.
 
 **Why it's robust**
 - **Measures** the magnification (handles variable-scale test sets, not just a fixed 10×)
@@ -80,11 +82,9 @@ SC/
 ├── README.md              this file
 ├── citations.md           all references (30% "augmentation" criterion)
 ├── requirements.txt       pip freeze (inference deps)
-├── requirements-train.txt training-only deps (scikit-learn)
 ├── LICENSE
 ├── data/                  ready-made 30-pair self-eval set (+ ground_truth.json)
-├── src/      ── core ──   localize.py (INFERENCE) · dataset_gen.py · eval.py · ml_ranker.npz
-├── training/              hybrid-ML pipeline (train_ranker.* · make_ranker_data.py)
+├── src/      ── core ──   localize.py (INFERENCE) · dataset_gen.py · eval.py
 ├── tools/                 predict overlay · selftest · off-center + blind test-set makers
 └── docs/                  REPORT.md · ALGORITHM_SUMMARY.md · images/
 ```
@@ -125,7 +125,7 @@ python src/localize.py <reference_image> <search_image>
 - **Inputs:** reference (high-mag) path, search (wide, low-mag) path.
 - **Output (stdout):** a single predicted center `x, y` in search-image pixels.
 - Runs standalone; unreadable paths exit non-zero with a clear error; a hard case still emits a coordinate (never crashes).
-- Options: `--ratio R` (magnification, default 10) · `--use-ml` (optional trained ranker) · `--verbose` (diagnostics to stderr).
+- Options: `--ratio R` (magnification, default 10) · `--verbose` (diagnostics to stderr).
 
 ```bash
 $ python src/localize.py data/pair_006_ref.png data/pair_006_search.png
@@ -141,10 +141,8 @@ $ python src/localize.py data/pair_006_ref.png data/pair_006_search.png
 | 1 | README with setup/run instructions | `README.md` |
 | 2 | Dataset generator (`--style`, `--n`, `--out`; records GT) | **`src/dataset_gen.py`** |
 | 3 | **Localization inference script** (ref + search → `x, y`) | **`src/localize.py`** |
-| 4 | DL model weights (optional hybrid) | `src/ml_ranker.npz` |
-| 5 | Training script / notebook (optional hybrid) | `training/train_ranker.ipynb` · `.py` · `make_ranker_data.py` |
-| 6 | `requirements.txt` (pip freeze) | `requirements.txt` |
-| 7 | Citation document | `citations.md` |
+| 4 | `requirements.txt` (pip freeze) | `requirements.txt` |
+| 5 | Citation document | `citations.md` |
 
 Supporting: `src/eval.py` (self-eval harness), `tools/` (predict, selftest,
 off-center + blind test-set makers), `docs/` (reports), `data/` (self-eval set).
@@ -219,8 +217,7 @@ center, ~3× runtime).
 
 **RGB optical bonus** (`--rgb`): **median 0.11 px, 95 % within 1 µm** — parity with
 the grayscale baseline, confirming the method generalizes to colour with no accuracy
-penalty. **Hybrid ML ranker:** test ROC-AUC **0.977**; reproduces (does not beat)
-the classical accuracy.
+penalty.
 
 **Never-crash guarantee:** verified on blank / ref-larger-than-search / 1×1 inputs —
 every degenerate case still prints a coordinate and exits 0 (image center +
@@ -236,21 +233,32 @@ every degenerate case still prints a coordinate and exits 0 (image center +
 
 ---
 
-## 🤖 Optional: hybrid ML ranker
+## 🧭 How the true repeat is chosen (fused-consensus selection)
 
-The classical algorithm is the default and needs **no** model. An optional small MLP (`14→16→8→1`) can rank candidates:
+No machine learning — the disambiguator is a **consensus of three independent, generator-agnostic
+signals**, each of which separates the true site from its look-alike repeats only weakly on its own,
+but decisively when they agree:
 
-- **Inference:** `python src/localize.py ref.png search.png --use-ml` — loads `src/ml_ranker.npz`, **pure-numpy** forward pass (no ML dep at inference).
-- **Retrain** (from `training/`): `pip install -r requirements-train.txt`, then `python make_ranker_data.py` and `jupyter notebook train_ranker.ipynb`.
+1. **Refined NCC** — the raw correlation peak.
+2. **Periodic-residual match** — subtract the estimated lattice (a separable comb filter) from both
+   the reference and each candidate window, then correlate the *aperiodic remainder* (mat boundaries,
+   defects, line-edge roughness). This is the "array-mode / cell-to-cell" cue a wafer tool uses, and
+   it is what pins one repeat versus the next.
+3. **Low-frequency envelope** — the slowly-varying per-site shading, which differs between repeats
+   independent of the fine texture.
 
-The hybrid *matches* (doesn't beat) classical accuracy — see [`docs/REPORT.md`](docs/REPORT.md) §8.
+Their z-scores are summed; the candidate that wins the consensus by a decisive margin is selected
+(including off-center, uniform-placement sites), otherwise the brief's nearest-to-center tie-break
+arbitrates. High-confidence single cues (crossing-defect fingerprint, aperiodic axis landmark) still
+short-circuit ahead of the consensus. Fully deterministic and auditable — see
+[`docs/REPORT.md`](docs/REPORT.md).
 
 ---
 
 ## 📋 Requirements
 
 Python 3.11 · `pip install -r requirements.txt` (full `pip freeze`). Inference needs only
-numpy / OpenCV / SciPy; scikit-learn is required **only** to retrain the optional ranker.
+numpy / OpenCV / SciPy — no machine-learning dependencies.
 
 ## 📄 License
 

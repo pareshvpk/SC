@@ -30,8 +30,8 @@ honest-failure case). `forced_periodic` pairs are kept pure-lattice so the manda
 "highly periodic, genuinely difficult" region is always present.
 
 **Note on the numbers below.** The §4 result and §5 failure case are measured on
-this realistic superstructure `data/`. The robustness studies in §8–§11 (hybrid ML,
-off-center, scale, RGB) were characterized on the pure-lattice baseline
+this realistic superstructure `data/`. The robustness studies in §8–§11 (fused-consensus
+selection, off-center, scale, RGB) were characterized on the pure-lattice baseline
 (96.7 % within 1 µm); their findings are *architecture properties* — relative
 effects that transfer — not tied to the exact base set.
 
@@ -161,34 +161,39 @@ All three misses are genuinely-hard by construction, not defects of the method:
   sensitivity of the current intersection sampler.
 - **Log-polar / Fourier-Mellin** refinement for larger scale/rotation jitter than
   the sweep covers, at constant cost.
-- **Learned local descriptor** keyed on the defect pattern — only if the official
-  test set proves harder than the fingerprint handles; a 30-pair set does not
-  justify DL yet.
 
-## 8. Optional hybrid ML ranker (`use_ml=True`)
+## 8. Fused-consensus selection (periodic-residual + envelope)
 
-A small **trained neural network** (MLP, 14→16→8→1) can replace the hand-tuned
-three-regime selector. It scores each classical candidate's probability of being
-the true site from the **same** per-candidate features the reliability logic uses
-(`candidate_features` in `localize.py`), so there is no train/serve skew; the
-highest-probability candidate within the ROI-eligible pool is selected.
+The hardest cases are periodic crops where several lattice repeats are near-identical
+under raw NCC. The selector resolves them with a **consensus of three independent,
+generator-agnostic identity signals**, none of which is reliable alone:
 
-- **Training** (`make_ranker_data.py` + `train_ranker.ipynb`): 200 generated pairs
-  → classical candidates → label = within 5 px of GT. scikit-learn `MLPClassifier`,
-  L2 + early stopping. Weights exported to `ml_ranker.npz`.
-- **Inference** is a **pure-numpy forward pass** in `localize.py` — no
-  sklearn/torch at run time. If `ml_ranker.npz` is absent, the classical selector
-  is used, so the pipeline always works.
-- **Result:** test ROC-AUC **0.977**; it *reproduces* the classical accuracy
-  rather than beating it — on the tuning set the classical selector is slightly
-  ahead (97 % vs 93 % within 1 µm), on a fresh held-out set the hybrid is
-  marginally ahead (82 % vs 80 %). Interpretation: the MLP **learned** the
-  reliability rules from data, a useful cross-check, but not a headline accuracy
-  win.
-- **Positioning:** the **classical selector is the default and the scored
-  solution** (interpretable, no model on the critical path). The hybrid ships as
-  the trained-model deliverable (enable with `localize(..., use_ml=True)`).
-  Training-only dependency: `requirements-train.txt`.
+- **Refined NCC** — the correlation peak.
+- **Periodic-residual match** — the estimated lattice pitch is removed from both the
+  reference template and each candidate's search window with a **separable comb
+  filter** (`I − ½(I«p + I»p)` per axis), and the *aperiodic remainders* are
+  correlated. This is the wafer-inspection **array-mode / cell-to-cell** idea: after
+  the periodic part is subtracted, what survives — mat boundaries, periphery strips,
+  defects, line-edge roughness — is exactly what distinguishes one repeat from the
+  next. Being separable and shift-invariant, it applies identically to a template and
+  a search patch, so NCC of the residuals stays a valid score.
+- **Low-frequency envelope** — the slowly-varying per-site shading, which differs
+  between repeats independent of the fine texture/defect model.
+
+Each signal is z-scored across the candidate set and the three are **summed**; when
+one candidate wins the fused score by a decisive margin it is selected — including
+**off-center, uniform-placement** sites the drift-ROI would otherwise discard (those
+candidates are harvested cheaply from the single-template full-image probe, at no
+extra correlation cost). On a genuinely ambiguous pure-wallpaper crop every repeat
+scores alike, the fused lead collapses, and the brief's **nearest-center** tie-break
+arbitrates — so consensus never *hurts* the bounded-drift case. High-confidence single
+cues (crossing-defect fingerprint, aperiodic axis landmark) still short-circuit ahead
+of the consensus.
+
+Measured against a strong purely-classical competitor on a neutral third-party
+generator (neither system was tuned on it), this selection is **ahead on both
+families** (DRAM and FinFET) and cuts the catastrophic-failure tail on the
+competitor's own distribution. Fully deterministic, no training data, no model.
 
 ## 9. Off-center robustness (drift-envelope stress test)
 
@@ -289,8 +294,5 @@ images. Both ends support it:
 - `dataset_gen.py` — FinFET / DRAM dataset generator.
 - `make_offcenter_sets.py` — off-center (inner/corner) drift-robustness test sets.
 - `make_blind_set.py` — blind positional test set (GT only, zones hidden).
-- `train_ranker.ipynb` / `train_ranker.py` — training for the optional hybrid MLP ranker.
-- `make_ranker_data.py` — builds the ranker's feature/label table.
-- `ml_ranker.npz` — exported MLP weights (numpy-only inference).
 - `citations.md` — literature backing every noise/blur/structural choice.
-- `requirements.txt` / `requirements-train.txt` — inference / training dependencies.
+- `requirements.txt` — inference dependencies (numpy / OpenCV / SciPy).

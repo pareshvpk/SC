@@ -7,7 +7,6 @@ noisier than the self-eval set.
 
     python selftest.py            # default: 20 pairs
     python selftest.py --n 40     # more pairs
-    python selftest.py --hybrid   # also test the optional ML ranker
 
 PASS criteria (self-eval, tune-able): median < 5 px AND >= 85% within 1 um.
 """
@@ -42,12 +41,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=20)
     ap.add_argument("--seed0", type=int, default=9000, help="unseen seed base")
-    ap.add_argument("--hybrid", action="store_true")
     args = ap.parse_args()
 
     import time
     rng = np.random.default_rng(123)
-    e_cls, t_cls, e_ml, e_noisy = [], [], [], []
+    e_cls, t_cls, e_noisy = [], [], []
 
     print(f"Generating {args.n} fresh unseen pairs (seeds {args.seed0}..{args.seed0+args.n-1})...")
     for i in range(args.n):
@@ -59,18 +57,12 @@ def main():
         t_cls.append(time.perf_counter() - t)
         e_cls.append(np.hypot(x - m.gt_x, y - m.gt_y))
 
-        if args.hybrid:
-            xm, ym, _ = localize(ref, search, use_ml=True)
-            e_ml.append(np.hypot(xm - m.gt_x, ym - m.gt_y))
-
         noisy = add_extra_noise(search, rng)             # noisier-test-set proxy
         xn, yn, _ = localize(ref, noisy)
         e_noisy.append(np.hypot(xn - m.gt_x, yn - m.gt_y))
 
     print("\nResults on UNSEEN data:")
     med, within = summarize("classical", e_cls, t_cls)
-    if args.hybrid:
-        summarize("hybrid (ML)", e_ml)
     summarize("classical+noise", e_noisy)
 
     ok = (med < 5.0) and (within >= 85.0)
